@@ -17,14 +17,11 @@ jobs:
   test:
     name: WatariCore (Linux)
     runs-on: ubuntu-latest
+    # setup-swift@v2 lags releases; keep in sync with .swift-version
+    container:
+      image: swift:6.4.0-bookworm
     steps:
       - uses: actions/checkout@v4
-      - name: Read Swift version
-        id: swift
-        run: echo "version=$(tr -d '[:space:]' < .swift-version)" >> "$GITHUB_OUTPUT"
-      - uses: swift-actions/setup-swift@v2
-        with:
-          swift-version: ${{ steps.swift.outputs.version }}
       - run: swift test
 
   build-mac:
