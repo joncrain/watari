@@ -108,6 +108,8 @@ struct TransferSelectionView: View {
         switch model.phase {
         case .previewReady, .finishedWithExceptions:
             return model.statusMessage
+        case .transferComplete:
+            return model.statusMessage
         case .copying:
             return "Transferring selected folders…"
         case .peerGone:
@@ -314,7 +316,7 @@ struct TransferSelectionView: View {
         case .peerGone:
             Button("Connect…") { model.showConnectSheet = true }
                 .keyboardShortcut(.defaultAction)
-        default:
+        case .transferComplete, .browsingOffers, .needsConnect:
             EmptyView()
         }
     }

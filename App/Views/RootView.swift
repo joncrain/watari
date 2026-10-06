@@ -2,37 +2,41 @@ import SwiftUI
 
 struct RootView: View {
     @EnvironmentObject private var model: AppModel
-    /// Sidebar hidden by default; user can reveal via toolbar / View menu.
-    @State private var columnVisibility: NavigationSplitViewVisibility = .detailOnly
+    /// Custom sidebar — avoid NavigationSplitView’s system `>>` toggle.
+    @State private var showSidebar = false
     @State private var showInspector = false
 
     var body: some View {
-        NavigationSplitView(columnVisibility: $columnVisibility) {
-            SidebarView()
-        } detail: {
+        HStack(spacing: 0) {
+            if showSidebar {
+                SidebarView()
+                    .frame(width: 220)
+                    .background(.background)
+                Divider()
+            }
+
             DetailView()
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+
+            if showInspector {
+                Divider()
+                InspectorView()
+                    .frame(width: 260)
+                    .background(.background)
+            }
         }
-        .inspector(isPresented: $showInspector) {
-            InspectorView()
-                .inspectorColumnWidth(min: 220, ideal: 260, max: 320)
-        }
-        // Drop the system `>>` “Show Sidebar” control; we place sidebar / inspector ourselves.
-        .toolbar(removing: .sidebarToggle)
         .toolbar {
             ToolbarItem(placement: .navigation) {
                 Button {
-                    columnVisibility = columnVisibility == .detailOnly ? .all : .detailOnly
+                    showSidebar.toggle()
                 } label: {
-                    Label(
-                        columnVisibility == .detailOnly ? "Show Sidebar" : "Hide Sidebar",
-                        systemImage: "sidebar.left"
-                    )
+                    Label(showSidebar ? "Hide Sidebar" : "Show Sidebar", systemImage: "sidebar.left")
                 }
-                .help(columnVisibility == .detailOnly ? "Show sidebar" : "Hide sidebar")
+                .help(showSidebar ? "Hide sidebar" : "Show sidebar")
             }
 
             ToolbarItemGroup(placement: .primaryAction) {
-                if model.selectedPeerID != nil {
+                if model.selectedPeerID != nil, model.phase != .transferComplete, !model.shouldShowSourcePrep {
                     Button("Preview", systemImage: "list.bullet.rectangle") { model.preview() }
                         .disabled(!model.canPreview)
                         .help(model.previewBlockedReason ?? "Preview what will copy from the source Mac")
@@ -45,13 +49,11 @@ struct RootView: View {
                     }
                     Button("Connect", systemImage: "link") { model.showConnectSheet = true }
                         .help("Connect or change peer")
-                } else {
+                } else if !model.shouldShowSourcePrep {
                     Button("Connect", systemImage: "link") { model.showConnectSheet = true }
                         .help("Connect to a source Mac")
                 }
-            }
 
-            ToolbarItem(placement: .primaryAction) {
                 Button {
                     showInspector.toggle()
                 } label: {

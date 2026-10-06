@@ -17,6 +17,7 @@ final class AppModel: ObservableObject {
         case browsingOffers
         case previewReady
         case copying
+        case transferComplete
         case finishedWithExceptions
         case peerGone
     }
@@ -47,7 +48,19 @@ final class AppModel: ObservableObject {
     @Published var indexedBytes: UInt64 = 0
     @Published var peerInventoryAvailable = false
     @Published var isRefreshingOffers = false
+    /// User opened “Offer folders…” or an inbound peer connected while listening.
+    @Published var showSourcePrep = false
+    @Published var inboundPeerConnected = false
+    @Published var lastTransferSummary: TransferCompleteSummary?
+    /// Overlapping inbound TLS sessions (pair+catalog may open more than one briefly).
+    private var inboundConnectionCount = 0
 
+    var shouldShowSourcePrep: Bool {
+        (showSourcePrep || inboundPeerConnected)
+            && selectedPeerID == nil
+            && phase != .transferComplete
+            && phase != .copying
+    }
     let bookmarkStore = BookmarkStore()
     let peerConnector = PeerConnector()
     let bonjour = BonjourBrowser()
@@ -181,7 +194,7 @@ final class AppModel: ObservableObject {
             selectedOfferNames.remove(name)
         }
         previewSummary = nil
-        if phase == .previewReady || phase == .finishedWithExceptions {
+        if phase == .previewReady || phase == .finishedWithExceptions || phase == .transferComplete {
             phase = .browsingOffers
             statusMessage = "Selection changed. Run Preview again."
         }
@@ -194,7 +207,7 @@ final class AppModel: ObservableObject {
             selectedOfferNames.subtract(names)
         }
         previewSummary = nil
-        if phase == .previewReady || phase == .finishedWithExceptions {
+        if phase == .previewReady || phase == .finishedWithExceptions || phase == .transferComplete {
             phase = .browsingOffers
         }
     }
@@ -413,6 +426,21 @@ final class AppModel: ObservableObject {
         }
     }
 
+    func dismissTransferSummary(keepPeer: Bool = false) {
+        lastTransferSummary = nil
+        progressFraction = 0
+        if keepPeer, selectedPeerID != nil {
+            phase = .browsingOffers
+            statusMessage = "Choose folders to transfer."
+        } else {
+            selectedPeerID = nil
+            selectedOfferNames = []
+            peerOffers = []
+            phase = .needsConnect
+            statusMessage = "Connect to another Mac to choose what to transfer."
+        }
+    }
+
     func start() {
         guard canStart, let peer = selectedPeer else {
             lastError = startBlockedReason ?? "Can’t start transfer yet."
@@ -424,7 +452,6 @@ final class AppModel: ObservableObject {
             lastError = "No destination folders to receive into."
             return
         }
-        // Ensure remap-to-receiving-user stays the default ownership story on apply.
         if !policy.remapOwnerToReceivingUser {
             statusMessage = "Pulling with source ownership preserved (advanced)."
         }
@@ -435,6 +462,9 @@ final class AppModel: ObservableObject {
         let permissionPolicy = policy
         let overrideEntry = receiveFolder
         let indexRootPath = overrideEntry?.path ?? destinationHomeURL.path
+        let previewSnapshot = previewSummary
+        let startedAt = Date()
+        let peerName = peer.displayName
         Task {
             do {
                 var overrideAccessURL: URL?
@@ -450,6 +480,7 @@ final class AppModel: ObservableObject {
                         bookmarkStore.stopAccess(to: overrideAccessURL)
                     }
                 }
+                let receivedBox = ReceivedBox()
                 try await transfer.pull(
                     rootNames: rootNames,
                     peer: peer,
@@ -459,6 +490,7 @@ final class AppModel: ObservableObject {
                     connector: peerConnector,
                     applier: permissionApplier,
                     onIndexUpdate: { [weak self] received in
+                        receivedBox.items = received
                         Task { @MainActor in
                             guard let self else { return }
                             ReceiveIndex.upsert(
@@ -476,11 +508,32 @@ final class AppModel: ObservableObject {
                     }
                 }
                 await MainActor.run {
-                    self.phase = (self.exceptionCount > 0) ? .finishedWithExceptions : .browsingOffers
-                    self.statusMessage = self.exceptionCount > 0
-                        ? "Finished with \(self.exceptionCount) permission note(s)."
-                        : "Finished."
+                    let duration = Date().timeIntervalSince(startedAt)
+                    let receivedItems = receivedBox.items
+                    let files = receivedItems.filter { !$0.isDirectory }.count
+                    let bytes = receivedItems.reduce(UInt64(0)) { $0 + $1.size }
+                    let remaps = previewSnapshot?.items.reduce(0) { partial, item in
+                        partial + item.permissionExceptions.filter { $0.code == .ownerRemapped }.count
+                    } ?? 0
+                    let notes = previewSnapshot?.permissionExceptionCount ?? remaps
+                    let summary = TransferCompleteSummary(
+                        peerDisplayName: peerName,
+                        folderNames: rootNames,
+                        filesTransferred: files,
+                        bytesTransferred: bytes,
+                        durationSeconds: duration,
+                        skipped: previewSnapshot?.skip ?? 0,
+                        unchanged: previewSnapshot?.unchanged ?? 0,
+                        permissionRemaps: remaps,
+                        permissionNotes: notes,
+                        hadExceptions: notes > 0 || remaps > 0
+                    )
+                    self.lastTransferSummary = summary
+                    self.phase = .transferComplete
                     self.progressFraction = 1
+                    self.statusMessage = summary.hadExceptions
+                        ? "Finished with permission notes."
+                        : "Transfer complete."
                 }
             } catch TransferSessionError.peerGone {
                 await MainActor.run {
@@ -593,6 +646,27 @@ final class AppModel: ObservableObject {
                     Task { @MainActor in
                         self?.lastError = message
                     }
+                },
+                onClientConnected: { [weak self] in
+                    Task { @MainActor in
+                        guard let self else { return }
+                        self.inboundConnectionCount += 1
+                        self.inboundPeerConnected = true
+                        if self.selectedPeerID == nil {
+                            self.showSourcePrep = true
+                            self.statusMessage = "A Mac connected — confirm folders you’re offering."
+                        }
+                    }
+                },
+                onClientDisconnected: { [weak self] in
+                    Task { @MainActor in
+                        guard let self else { return }
+                        self.inboundConnectionCount = max(0, self.inboundConnectionCount - 1)
+                        self.inboundPeerConnected = self.inboundConnectionCount > 0
+                        if !self.inboundPeerConnected, self.selectedPeerID == nil, self.showSourcePrep {
+                            self.statusMessage = "Peer disconnected. Listening for another connection."
+                        }
+                    }
                 }
             )
         } catch {
@@ -635,6 +709,7 @@ final class AppModel: ObservableObject {
         defer { connection.cancel() }
         peers.append(record)
         selectedPeerID = record.id
+        showSourcePrep = false
         showConnectSheet = false
         phase = .browsingOffers
         statusMessage = "Peer connected. Loading offered folders…"
@@ -648,7 +723,7 @@ final class AppModel: ObservableObject {
             selectedOfferNames = selectedOfferNames.intersection(Set(catalog.roots.map(\.name)))
             isRefreshingOffers = false
             if catalog.roots.isEmpty {
-                statusMessage = "\(catalog.displayName) isn’t offering folders yet. On that Mac, enable Listen and offer folders in Settings."
+                statusMessage = "\(catalog.displayName) isn’t offering folders yet. On that Mac, enable Listen and offer folders."
             } else {
                 statusMessage = "Connected to \(catalog.displayName). Choose folders to transfer here."
             }
@@ -664,6 +739,7 @@ final class AppModel: ObservableObject {
     private func adoptConnectedPeer(_ record: PeerRecord) {
         peers.append(record)
         selectedPeerID = record.id
+        showSourcePrep = false
         showConnectSheet = false
         phase = .browsingOffers
         statusMessage = "Peer connected. Loading offered folders…"
@@ -674,4 +750,9 @@ final class AppModel: ObservableObject {
         indexedBytes = fileIndex.totalBytes()
         try? fileIndex.save(to: indexURL)
     }
+}
+
+/// Mutable bag so pull’s index callback can hand received metadata back to Start.
+private final class ReceivedBox: @unchecked Sendable {
+    var items: [FileMetadata] = []
 }

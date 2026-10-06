@@ -26,7 +26,9 @@ final class JobListener: @unchecked Sendable {
         advertiseBonjour: Bool,
         applier: PermissionApplier,
         onIndexUpdate: @escaping @Sendable ([FileMetadata]) -> Void,
-        onError: @escaping @Sendable (String) -> Void
+        onError: @escaping @Sendable (String) -> Void,
+        onClientConnected: (@Sendable () -> Void)? = nil,
+        onClientDisconnected: (@Sendable () -> Void)? = nil
     ) throws {
         stop()
         guard let nwPort = NWEndpoint.Port(rawValue: UInt16(port)) else {
@@ -52,11 +54,13 @@ final class JobListener: @unchecked Sendable {
             let key = self.identityKey()
             let name = self.displayName()
             connection.start(queue: .global(qos: .userInitiated))
-            // One TransferSession per connection — a shared session raced when pair()+catalog
-            // opened two sockets and both called serve() (cancelled / peerGone).
+            onClientConnected?()
             let session = TransferSession()
             Task {
-                defer { connection.cancel() }
+                defer {
+                    connection.cancel()
+                    onClientDisconnected?()
+                }
                 do {
                     try await session.serve(
                         on: connection,
