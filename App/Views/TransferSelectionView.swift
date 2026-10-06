@@ -62,8 +62,6 @@ struct TransferSelectionView: View {
                         .frame(minHeight: 200, maxHeight: 320)
 
                     footer
-
-                    receiveAndActions
                 }
                 .frame(maxWidth: 540, alignment: .leading)
                 .padding(.top, 20)
@@ -72,7 +70,7 @@ struct TransferSelectionView: View {
                 VStack(alignment: .leading, spacing: 8) {
                     Text("Services")
                         .font(.headline)
-                    Text("Checked items run with Start — same transfer plan as folders.")
+                    Text(servicesCaption)
                         .font(.caption)
                         .foregroundStyle(.secondary)
 
@@ -81,6 +79,11 @@ struct TransferSelectionView: View {
                 .frame(maxWidth: 540, alignment: .leading)
                 .padding(.top, 22)
                 .padding(.horizontal, 40)
+
+                receiveAndActions
+                    .frame(maxWidth: 540, alignment: .leading)
+                    .padding(.top, 22)
+                    .padding(.horizontal, 40)
 
                 phaseChrome
                     .padding(.top, 16)
@@ -102,6 +105,13 @@ struct TransferSelectionView: View {
             ? (model.selectedPeer?.displayName ?? "the other Mac")
             : model.peerOfferDisplayName
         return "From \(source). Sizes come from that Mac’s folder index."
+    }
+
+    private var servicesCaption: String {
+        let source = model.peerOfferDisplayName.isEmpty
+            ? (model.selectedPeer?.displayName ?? "the other Mac")
+            : model.peerOfferDisplayName
+        return "From \(source). Checked items join the same Start plan as folders."
     }
 
     private var subtitle: String {
@@ -309,7 +319,7 @@ struct TransferSelectionView: View {
             .foregroundStyle(.secondary)
     }
 
-    /// Home mapping (default) or advanced single-parent override + Start.
+    /// Path mapping, then one Start for Folders + Services.
     private var receiveAndActions: some View {
         VStack(alignment: .leading, spacing: 10) {
             Text("Receive on this Mac")
@@ -350,6 +360,12 @@ struct TransferSelectionView: View {
             }
             .font(.caption)
 
+            Divider()
+                .padding(.vertical, 2)
+
+            Text("Transfer plan")
+                .font(.subheadline.weight(.medium))
+
             HStack(spacing: 12) {
                 Button("Start") { model.start() }
                     .buttonStyle(.borderedProminent)
@@ -373,7 +389,6 @@ struct TransferSelectionView: View {
                     .foregroundStyle(.secondary)
             }
         }
-        .padding(.top, 8)
     }
 
     private var startHint: String {
