@@ -1,5 +1,7 @@
+import AppKit
 import Foundation
 import SwiftUI
+import UniformTypeIdentifiers
 import WatariCore
 
 @MainActor
@@ -136,30 +138,100 @@ final class AppModel: ObservableObject {
         }
     }
 
+    func reauthorizeFolder(_ id: BookmarkEntry.ID) {
+        guard let index = folderBookmarks.firstIndex(where: { $0.id == id }) else { return }
+        do {
+            let updated = try bookmarkStore.reauthorize(entry: folderBookmarks[index])
+            folderBookmarks[index] = updated
+            statusMessage = "Re-authorized \(updated.displayName)."
+            preview = nil
+            phase = selectedPeerID == nil ? .waitingForPeer : .waitingForPeer
+        } catch {
+            lastError = error.localizedDescription
+        }
+    }
+
+    func exportExceptionLog() {
+        let peerId = selectedPeer?.id ?? "none"
+        let log: JobLog
+        if let preview {
+            log = JobLog.fromPreview(preview, jobId: UUID().uuidString, peerId: peerId)
+        } else {
+            log = jobLog
+        }
+        guard !log.events.isEmpty else {
+            lastError = "Nothing to export yet — run Preview first."
+            return
+        }
+        do {
+            let data = try log.jsonLinesData()
+            let panel = NSSavePanel()
+            panel.allowedContentTypes = [.json]
+            panel.nameFieldStringValue = "watari-exceptions.jsonl"
+            panel.message = "Export Preview actions and permission exceptions (JSON Lines)."
+            guard panel.runModal() == .OK, let url = panel.url else { return }
+            try data.write(to: url, options: .atomic)
+            statusMessage = "Exported \(log.exceptionEvents.count) exception(s), \(log.events.count) event(s)."
+            jobLog = log
+        } catch {
+            lastError = error.localizedDescription
+        }
+    }
+
+    @discardableResult
+    private func refreshFolderBookmarks() throws -> Bool {
+        var any = false
+        for i in folderBookmarks.indices {
+            let result = try bookmarkStore.refreshIfStale(folderBookmarks[i])
+            if result.didRefresh {
+                folderBookmarks[i] = result.entry
+                any = true
+            }
+        }
+        if let receive = receiveFolder {
+            let result = try bookmarkStore.refreshIfStale(receive)
+            if result.didRefresh {
+                receiveFolder = result.entry
+                any = true
+            }
+        }
+        return any
+    }
+
     func preview() {
         guard canPreview, let peer = selectedPeer else { return }
         statusMessage = "Scanning and asking peer for inventory…"
-        let folders = folderBookmarks
         let conflictPolicy = conflict
         let permissionPolicy = policy
         let dlpPolicy = dlp
         Task {
             do {
+                let refreshed = try await MainActor.run { () -> Bool in
+                    try self.refreshFolderBookmarks()
+                }
+                let folders = await MainActor.run { self.folderBookmarks }
                 var sources: [FileMetadata] = []
                 var skipped: [(path: String, reason: SkipReason)] = []
                 for folder in folders {
-                    let url = try bookmarkStore.startAccess(to: folder)
-                    defer { bookmarkStore.stopAccess(to: url) }
+                    let access = try bookmarkStore.startAccessRefreshing(folder)
+                    defer { bookmarkStore.stopAccess(to: access.url) }
+                    if access.didRefresh {
+                        await MainActor.run {
+                            if let idx = self.folderBookmarks.firstIndex(where: { $0.id == access.entry.id }) {
+                                self.folderBookmarks[idx] = access.entry
+                            }
+                        }
+                    }
                     let scanned = try FileScanner.scan(
-                        root: url,
-                        displayRoot: folder.displayName,
+                        root: access.url,
+                        displayRoot: access.entry.displayName,
                         denylist: Denylist()
                     )
                     sources.append(contentsOf: scanned.entries)
                     skipped.append(contentsOf: scanned.skipped)
-                    fileIndex.replace(rootPath: folder.path, metadata: scanned.entries)
+                    fileIndex.replace(rootPath: access.entry.path, metadata: scanned.entries)
                 }
-                persistIndex()
+                await MainActor.run { self.persistIndex() }
 
                 var destinations: [String: FileMetadata] = [:]
                 var inventoryOK = false
@@ -186,15 +258,22 @@ final class AppModel: ObservableObject {
                     dlp: dlpPolicy,
                     receiving: receiving
                 )
+                let log = JobLog.fromPreview(
+                    summary,
+                    jobId: UUID().uuidString,
+                    peerId: peer.id
+                )
                 await MainActor.run {
                     self.peerDestinations = destinations
                     self.peerInventoryAvailable = inventoryOK
                     self.preview = summary
+                    self.jobLog = log
                     self.selectedPreviewPath = summary.items.first?.relativePath
                     self.phase = .previewReady
                     let inv = inventoryOK ? "peer inventory" : "local only (peer inventory unavailable)"
+                    let refreshNote = refreshed ? " · refreshed folder access" : ""
                     self.statusMessage =
-                        "Preview ready (\(inv)) — \(summary.copy) copy, \(summary.update) update, \(summary.unchanged) unchanged, \(summary.keepBoth) keep both, \(summary.skip) skip · \(ByteCountFormatter.string(fromByteCount: Int64(self.indexedBytes), countStyle: .file)) indexed"
+                        "Preview ready (\(inv)) — \(summary.copy) copy, \(summary.update) update, \(summary.unchanged) unchanged, \(summary.keepBoth) keep both, \(summary.skip) skip · \(ByteCountFormatter.string(fromByteCount: Int64(self.indexedBytes), countStyle: .file)) indexed\(refreshNote)"
                 }
             } catch {
                 await MainActor.run {
@@ -207,6 +286,12 @@ final class AppModel: ObservableObject {
 
     func start() {
         guard canStart, let peer = selectedPeer else { return }
+        do {
+            _ = try refreshFolderBookmarks()
+        } catch {
+            lastError = error.localizedDescription
+            return
+        }
         phase = .copying
         statusMessage = "Copying to \(peer.displayName)…"
         progressFraction = 0
@@ -284,18 +369,22 @@ final class AppModel: ObservableObject {
         }
         guard network.listenEnabled, let receive = receiveFolder else { return }
         do {
-            let url = try bookmarkStore.startAccess(to: receive)
-            receiveAccessURL = url
+            let access = try bookmarkStore.startAccessRefreshing(receive)
+            if access.didRefresh {
+                receiveFolder = access.entry
+            }
+            receiveAccessURL = access.url
+            let receivePath = access.entry.path
             try jobListener.start(
                 port: network.listenPort,
-                destinationRoot: url,
+                destinationRoot: access.url,
                 applier: permissionApplier,
                 onIndexUpdate: { [weak self] received in
                     Task { @MainActor in
                         guard let self else { return }
                         ReceiveIndex.upsert(
                             &self.fileIndex,
-                            destinationRootPath: receive.path,
+                            destinationRootPath: receivePath,
                             received: received
                         )
                         self.persistIndex()

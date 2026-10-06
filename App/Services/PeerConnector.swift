@@ -107,7 +107,8 @@ final class PeerConnector: @unchecked Sendable {
         }
 
         try await send(payload, on: connection)
-        let frame = try await receiveFrame(on: connection)
+        let frames = FrameBuffer()
+        let frame = try await receiveFrame(on: connection, buffer: frames)
         guard frame.type == .hello else {
             throw PeerConnectorError.handshakeFailed("Expected hello")
         }
@@ -130,26 +131,30 @@ final class PeerConnector: @unchecked Sendable {
         }
     }
 
-    private func receiveFrame(on connection: NWConnection) async throws -> WireFrame {
-        try await withCheckedThrowingContinuation { (cont: CheckedContinuation<WireFrame, Error>) in
-            connection.receive(minimumIncompleteLength: 5, maximumLength: TransferCodec.maxPayloadSize + 5) { content, _, _, error in
-                if let error {
-                    cont.resume(throwing: error)
-                    return
-                }
-                guard var data = content else {
-                    cont.resume(throwing: PeerConnectorError.handshakeFailed("Empty response"))
-                    return
-                }
-                do {
-                    guard let frame = try TransferCodec.decode(from: &data) else {
-                        cont.resume(throwing: PeerConnectorError.handshakeFailed("Incomplete frame"))
+    private func receiveFrame(on connection: NWConnection, buffer: FrameBuffer) async throws -> WireFrame {
+        if let ready = try buffer.nextFrame() {
+            return ready
+        }
+        while true {
+            let chunk: Data = try await withCheckedThrowingContinuation { cont in
+                connection.receive(
+                    minimumIncompleteLength: 1,
+                    maximumLength: TransferCodec.maxPayloadSize + 5
+                ) { content, _, _, error in
+                    if let error {
+                        cont.resume(throwing: error)
                         return
                     }
-                    cont.resume(returning: frame)
-                } catch {
-                    cont.resume(throwing: error)
+                    guard let data = content, !data.isEmpty else {
+                        cont.resume(throwing: PeerConnectorError.handshakeFailed("Empty response"))
+                        return
+                    }
+                    cont.resume(returning: data)
                 }
+            }
+            buffer.append(chunk)
+            if let frame = try buffer.nextFrame() {
+                return frame
             }
         }
     }

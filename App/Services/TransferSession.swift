@@ -40,11 +40,12 @@ final class TransferSession: @unchecked Sendable {
         let connection = try await connector.openTLS(to: peer)
         defer { connection.cancel() }
 
+        let frames = FrameBuffer()
         try await send(
             try TransferCodec.encodeJSON(.inventoryRequest, InventoryRequestPayload(rootNames: rootNames)),
             on: connection
         )
-        let frame = try await receiveFrame(on: connection)
+        let frame = try await receiveFrame(on: connection, buffer: frames)
         guard frame.type == .inventoryResponse else {
             throw TransferSessionError.inventoryFailed("Expected inventoryResponse, got \(frame.type)")
         }
@@ -72,12 +73,12 @@ final class TransferSession: @unchecked Sendable {
         var roots: [String: URL] = [:]
         var accessed: [URL] = []
         for folder in folders {
-            let url = try bookmarkStore.startAccess(to: folder)
-            accessed.append(url)
-            roots[folder.displayName] = url
+            let access = try bookmarkStore.startAccessRefreshing(folder)
+            accessed.append(access.url)
+            roots[access.entry.displayName] = access.url
             let scanned = try FileScanner.scan(
-                root: url,
-                displayRoot: folder.displayName,
+                root: access.url,
+                displayRoot: access.entry.displayName,
                 denylist: denylist
             )
             sources.append(contentsOf: scanned.entries)
@@ -163,9 +164,10 @@ final class TransferSession: @unchecked Sendable {
         progress: @escaping (Double, String?) -> Void
     ) async throws {
         cancelled = false
+        let frames = FrameBuffer()
 
         // Hello exchange (client speaks first).
-        let helloFrame = try await receiveFrame(on: connection)
+        let helloFrame = try await receiveFrame(on: connection, buffer: frames)
         if helloFrame.type == .hello {
             let reply = HelloPayload(
                 appVersion: Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "0.1.0",
@@ -179,6 +181,7 @@ final class TransferSession: @unchecked Sendable {
             try await receiveJob(
                 firstFrame: helloFrame,
                 on: connection,
+                buffer: frames,
                 destinationRoot: destinationRoot,
                 applier: applier,
                 onIndexUpdate: onIndexUpdate,
@@ -190,7 +193,7 @@ final class TransferSession: @unchecked Sendable {
         while !cancelled {
             let frame: WireFrame
             do {
-                frame = try await receiveFrame(on: connection)
+                frame = try await receiveFrame(on: connection, buffer: frames)
             } catch {
                 throw TransferSessionError.peerGone
             }
@@ -202,6 +205,7 @@ final class TransferSession: @unchecked Sendable {
                 try await receiveJob(
                     firstFrame: frame,
                     on: connection,
+                    buffer: frames,
                     destinationRoot: destinationRoot,
                     applier: applier,
                     onIndexUpdate: onIndexUpdate,
@@ -249,6 +253,7 @@ final class TransferSession: @unchecked Sendable {
         try await receiveJob(
             firstFrame: nil,
             on: connection,
+            buffer: FrameBuffer(),
             destinationRoot: destinationRoot,
             policy: policy,
             applier: applier,
@@ -260,6 +265,7 @@ final class TransferSession: @unchecked Sendable {
     private func receiveJob(
         firstFrame: WireFrame?,
         on connection: NWConnection,
+        buffer: FrameBuffer,
         destinationRoot: URL,
         policy: PermissionPolicy = .default,
         applier: PermissionApplier,
@@ -350,7 +356,7 @@ final class TransferSession: @unchecked Sendable {
         while !cancelled {
             let frame: WireFrame
             do {
-                frame = try await receiveFrame(on: connection)
+                frame = try await receiveFrame(on: connection, buffer: buffer)
             } catch {
                 throw TransferSessionError.peerGone
             }
@@ -368,30 +374,34 @@ final class TransferSession: @unchecked Sendable {
         }
     }
 
-    private func receiveFrame(on connection: NWConnection) async throws -> WireFrame {
-        try await withCheckedThrowingContinuation { (cont: CheckedContinuation<WireFrame, Error>) in
-            connection.receive(minimumIncompleteLength: 5, maximumLength: TransferCodec.maxPayloadSize + 5) { content, _, isComplete, error in
-                if let error {
-                    cont.resume(throwing: error)
-                    return
-                }
-                if isComplete && (content == nil || content?.isEmpty == true) {
-                    cont.resume(throwing: TransferSessionError.peerGone)
-                    return
-                }
-                guard var data = content else {
-                    cont.resume(throwing: TransferSessionError.peerGone)
-                    return
-                }
-                do {
-                    guard let frame = try TransferCodec.decode(from: &data) else {
+    private func receiveFrame(on connection: NWConnection, buffer: FrameBuffer) async throws -> WireFrame {
+        if let ready = try buffer.nextFrame() {
+            return ready
+        }
+        while true {
+            let chunk: Data = try await withCheckedThrowingContinuation { cont in
+                connection.receive(
+                    minimumIncompleteLength: 1,
+                    maximumLength: TransferCodec.maxPayloadSize + 5
+                ) { content, _, isComplete, error in
+                    if let error {
+                        cont.resume(throwing: error)
+                        return
+                    }
+                    if isComplete && (content == nil || content?.isEmpty == true) {
                         cont.resume(throwing: TransferSessionError.peerGone)
                         return
                     }
-                    cont.resume(returning: frame)
-                } catch {
-                    cont.resume(throwing: error)
+                    guard let data = content, !data.isEmpty else {
+                        cont.resume(throwing: TransferSessionError.peerGone)
+                        return
+                    }
+                    cont.resume(returning: data)
                 }
+            }
+            buffer.append(chunk)
+            if let frame = try buffer.nextFrame() {
+                return frame
             }
         }
     }

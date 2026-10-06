@@ -51,6 +51,10 @@ public struct JobLog: Sendable {
         events.append(event)
     }
 
+    public var exceptionEvents: [JobLogEvent] {
+        events.filter { $0.action == .exception }
+    }
+
     public func jsonLines() throws -> String {
         let encoder = JSONEncoder.watari
         var lines: [String] = []
@@ -60,5 +64,56 @@ public struct JobLog: Sendable {
             lines.append(line)
         }
         return lines.joined(separator: "\n")
+    }
+
+    public func jsonLinesData() throws -> Data {
+        Data((try jsonLines()).utf8)
+    }
+
+    /// Build an audit log from a Preview summary (actions + permission exceptions).
+    public static func fromPreview(
+        _ summary: PreviewSummary,
+        jobId: String,
+        peerId: String,
+        timestamp: Date = Date()
+    ) -> JobLog {
+        var log = JobLog()
+        for item in summary.items {
+            let action: JobLogAction
+            switch item.action {
+            case .copy: action = .copy
+            case .update: action = .update
+            case .keepBoth: action = .keepBoth
+            case .skip: action = .skip
+            case .unchanged: action = .unchanged
+            }
+            log.append(
+                JobLogEvent(
+                    timestamp: timestamp,
+                    jobId: jobId,
+                    peerId: peerId,
+                    path: item.relativePath,
+                    action: action,
+                    reason: item.skipReason?.rawValue,
+                    bytes: item.source?.size,
+                    permissionDelta: nil
+                )
+            )
+            for ex in item.permissionExceptions {
+                log.append(
+                    JobLogEvent(
+                        timestamp: timestamp,
+                        jobId: jobId,
+                        peerId: peerId,
+                        path: item.relativePath,
+                        action: .exception,
+                        reason: ex.code.rawValue,
+                        bytes: nil,
+                        permissionDelta: ex.detail
+                    )
+                )
+            }
+        }
+        return log
     }
 }

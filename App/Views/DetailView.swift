@@ -111,6 +111,7 @@ struct DetailView: View {
                                 .truncationMode(.middle)
                         }
                         .contextMenu {
+                            Button("Re-authorize…") { model.reauthorizeFolder(folder.id) }
                             Button("Remove", role: .destructive) { model.removeFolder(folder.id) }
                         }
                     }

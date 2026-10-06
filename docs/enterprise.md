@@ -98,7 +98,7 @@ Each job writes structured events (JSON Lines):
 | `jobId` | UUID |
 | `peerId` | Paired peer id |
 | `path` | Relative path within selection |
-| `action` | `copy` · `update` · `skip` · `unchanged` · `exception` |
+| `action` | `copy` · `update` · `keepBoth` · `skip` · `unchanged` · `exception` |
 | `reason` | Machine-readable code (`denylist`, `tcc`, `symlink_skip`, `acl_dropped`, …) |
 | `bytes` | Payload size when applicable |
 | `permissionDelta` | Summary of metadata policy applied |

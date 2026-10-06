@@ -43,6 +43,12 @@ struct InspectorView: View {
             }
             Section("Exceptions") {
                 LabeledContent("In last preview", value: "\(model.exceptionCount)")
+                LabeledContent("Log events", value: "\(model.jobLog.events.count)")
+                Button("Export log…") { model.exportExceptionLog() }
+                    .disabled(model.preview == nil && model.jobLog.events.isEmpty)
+                Text("JSON Lines audit export: actions plus permission exception codes.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
         }
         .formStyle(.grouped)
