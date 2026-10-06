@@ -90,8 +90,17 @@ enum WatariTLS {
 
         let keychain = try openFileKeychain(at: keychainURL, passphrase: passphrase)
         if let existing = copyIdentity(from: keychain) {
-            tlsLog.info("TLS identity ready (existing file keychain item)")
-            return existing
+            // Re-apply ACL every launch so ad-hoc Debug rebuilds stay trusted.
+            if applyUnpromptedAccess(to: existing) {
+                relabelIdentity(existing)
+                tlsLog.info("TLS identity ready (existing file keychain item)")
+                return existing
+            }
+            // Existing key ACL may require an interactive owner change — recreate from p12 with ACL at import.
+            tlsLog.info("Recreating file keychain so TLS key ACL can be set without a prompt")
+            try? FileManager.default.removeItem(at: keychainURL)
+            let fresh = try openFileKeychain(at: keychainURL, passphrase: passphrase)
+            return try importPKCS12(from: p12URL, passphrase: passphrase, into: fresh)
         }
         return try importPKCS12(from: p12URL, passphrase: passphrase, into: keychain)
     }
@@ -107,6 +116,69 @@ enum WatariTLS {
         let status = SecItemCopyMatching(query as CFDictionary, &item)
         guard status == errSecSuccess, let item else { return nil }
         return (item as! SecIdentity)
+    }
+
+    /// Access that lets Watari sign with the TLS key without an "Always Allow" sheet.
+    /// `applicationList: nil` = any process that already unlocked this app-owned file keychain
+    /// (only Watari has the passphrase). Survives ad-hoc Debug re-ships better than pinning
+    /// a single code-directory hash via SecTrustedApplication.
+    private static func makeUnpromptedAccess() -> SecAccess? {
+        var access: SecAccess?
+        let status = SecAccessCreate("Watari Peer" as CFString, [] as CFArray, &access)
+        guard status == errSecSuccess, let access else {
+            tlsLog.error("SecAccessCreate \(status)")
+            return nil
+        }
+        var acl: SecACL?
+        let aclStatus = SecACLCreateWithSimpleContents(
+            access,
+            nil,
+            "Watari Peer" as CFString,
+            [],
+            &acl
+        )
+        if aclStatus != errSecSuccess {
+            tlsLog.error("SecACLCreateWithSimpleContents \(aclStatus)")
+            // Fall back: trust only the calling app (may re-prompt after ad-hoc rebuilds).
+            var fallback: SecAccess?
+            if SecAccessCreate("Watari Peer" as CFString, nil, &fallback) == errSecSuccess {
+                return fallback
+            }
+            return nil
+        }
+        return access
+    }
+
+    @discardableResult
+    private static func applyUnpromptedAccess(to identity: SecIdentity) -> Bool {
+        guard let access = makeUnpromptedAccess() else { return false }
+        var privateKey: SecKey?
+        guard SecIdentityCopyPrivateKey(identity, &privateKey) == errSecSuccess,
+              let privateKey else { return false }
+        let item = privateKey as! SecKeychainItem
+        let status = SecKeychainItemSetAccess(item, access)
+        if status != errSecSuccess {
+            tlsLog.error("SecKeychainItemSetAccess \(status)")
+            return false
+        }
+        tlsLog.info("TLS private-key ACL set (no Always Allow prompt)")
+        return true
+    }
+
+    /// PKCS#12 import labels the key "Imported Private Key" by default — rename for clarity.
+    private static func relabelIdentity(_ identity: SecIdentity) {
+        var privateKey: SecKey?
+        if SecIdentityCopyPrivateKey(identity, &privateKey) == errSecSuccess, let privateKey {
+            let update: [String: Any] = [kSecAttrLabel as String: "Watari Peer"]
+            let query: [String: Any] = [kSecValueRef as String: privateKey]
+            _ = SecItemUpdate(query as CFDictionary, update as CFDictionary)
+        }
+        var certificate: SecCertificate?
+        if SecIdentityCopyCertificate(identity, &certificate) == errSecSuccess, let certificate {
+            let update: [String: Any] = [kSecAttrLabel as String: "Watari Peer"]
+            let query: [String: Any] = [kSecValueRef as String: certificate]
+            _ = SecItemUpdate(query as CFDictionary, update as CFDictionary)
+        }
     }
 
     private static func supportDirectory() throws -> URL {
@@ -171,19 +243,25 @@ enum WatariTLS {
         var items: CFArray?
         // Import into the Watari file keychain only — never login keychain, never memory-only
         // (memory-only PKCS12 import crashes on some macOS builds with NULL SecKeyRef).
-        let options: [String: Any] = [
+        var options: [String: Any] = [
             kSecImportExportPassphrase as String: passphrase,
             kSecImportExportKeychain as String: keychain,
         ]
+        if let access = makeUnpromptedAccess() {
+            options[kSecImportExportAccess as String] = access
+        }
         let status = SecPKCS12Import(data as CFData, options as CFDictionary, &items)
         guard status == errSecSuccess, let items = items as? [[String: Any]], let first = items.first else {
             throw TLSIdentityError.keyed("PKCS12 import \(status)")
         }
-        guard let identity = first[kSecImportItemIdentity as String] else {
+        guard let identityRef = first[kSecImportItemIdentity as String] else {
             throw TLSIdentityError.keyed("PKCS12 missing identity")
         }
+        let identity = identityRef as! SecIdentity
+        applyUnpromptedAccess(to: identity)
+        relabelIdentity(identity)
         tlsLog.info("TLS identity ready (Application Support file keychain)")
-        return identity as! SecIdentity
+        return identity
     }
 
     private static func generatePKCS12(at p12URL: URL, passphrase: String) throws {

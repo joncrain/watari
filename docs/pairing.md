@@ -39,6 +39,7 @@ That dialog is almost certainly **Application Firewall**, not keychain and not F
 - **Debug / ad-hoc builds** (`codesign` Signature=adhoc): macOS often asks **again after every rebuild** because the code directory hash changed.
 - **Not fixed by Full Disk Access.** FDA does not authorize firewall or Local Network; PRODUCT.md keeps FDA out of v1 on purpose.
 - **Keychain “dev key”** was a separate bug (login-keychain TLS identity) and is fixed — Watari no longer uses the login keychain for transport TLS.
+- **Keychain “Imported Private Key” / “Watari Peer”:** that is Watari’s self-signed TLS transport key in the app-owned file keychain — **not** Apple Development. If an older Debug build prompts, click **Always Allow** once; current builds set the key ACL so Listen should not ask again.
 
 ### How to preapprove (no FDA)
 
