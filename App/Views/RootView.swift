@@ -16,7 +16,21 @@ struct RootView: View {
             InspectorView()
                 .inspectorColumnWidth(min: 220, ideal: 260, max: 320)
         }
+        // Drop the system `>>` “Show Sidebar” control; we place sidebar / inspector ourselves.
+        .toolbar(removing: .sidebarToggle)
         .toolbar {
+            ToolbarItem(placement: .navigation) {
+                Button {
+                    columnVisibility = columnVisibility == .detailOnly ? .all : .detailOnly
+                } label: {
+                    Label(
+                        columnVisibility == .detailOnly ? "Show Sidebar" : "Hide Sidebar",
+                        systemImage: "sidebar.left"
+                    )
+                }
+                .help(columnVisibility == .detailOnly ? "Show sidebar" : "Hide sidebar")
+            }
+
             ToolbarItemGroup(placement: .primaryAction) {
                 if model.selectedPeerID != nil {
                     Button("Preview", systemImage: "list.bullet.rectangle") { model.preview() }
@@ -36,13 +50,15 @@ struct RootView: View {
                         .help("Connect to a source Mac")
                 }
             }
-            ToolbarItemGroup(placement: .primaryAction) {
-                Button("Sidebar", systemImage: "sidebar.left") {
-                    columnVisibility = columnVisibility == .detailOnly ? .all : .detailOnly
-                }
-                .help(columnVisibility == .detailOnly ? "Show sidebar" : "Hide sidebar")
-                Button("Inspector", systemImage: "sidebar.trailing") {
+
+            ToolbarItem(placement: .primaryAction) {
+                Button {
                     showInspector.toggle()
+                } label: {
+                    Label(
+                        showInspector ? "Hide Inspector" : "Show Inspector",
+                        systemImage: "sidebar.trailing"
+                    )
                 }
                 .help(showInspector ? "Hide inspector" : "Show inspector")
             }
