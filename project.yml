@@ -1,0 +1,36 @@
+name: Watari
+options:
+  bundleIdPrefix: app.watari
+  deploymentTarget:
+    macOS: "14.0"
+  createIntermediateGroups: true
+settings:
+  base:
+    SWIFT_VERSION: "6.0"
+    MACOSX_DEPLOYMENT_TARGET: "14.0"
+    ENABLE_HARDENED_RUNTIME: YES
+    CODE_SIGN_STYLE: Automatic
+packages:
+  Watari:
+    path: .
+targets:
+  Watari:
+    type: application
+    platform: macOS
+    sources:
+      - path: App
+    dependencies:
+      - package: Watari
+        product: WatariCore
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: app.watari.mac
+        PRODUCT_NAME: Watari
+        INFOPLIST_FILE: App/Info.plist
+        CODE_SIGN_ENTITLEMENTS: App/Watari.entitlements
+        COMBINE_HIDPI_IMAGES: YES
+        CURRENT_PROJECT_VERSION: 1
+        MARKETING_VERSION: 0.1.0
+        GENERATE_INFOPLIST_FILE: NO
+    entitlements:
+      path: App/Watari.entitlements

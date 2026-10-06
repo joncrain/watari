@@ -1,0 +1,153 @@
+import Foundation
+
+/// Frame types on the Watari wire protocol (TLS payload framing).
+public enum FrameType: UInt8, Codable, Sendable {
+    case hello = 1
+    case pairChallenge = 2
+    case pairResponse = 3
+    case jobManifest = 4
+    case fileHeader = 5
+    case fileChunk = 6
+    case fileEnd = 7
+    case jobComplete = 8
+    case error = 9
+    case ping = 10
+    case pong = 11
+}
+
+public struct WireFrame: Sendable, Equatable {
+    public var type: FrameType
+    public var payload: Data
+
+    public init(type: FrameType, payload: Data = Data()) {
+        self.type = type
+        self.payload = payload
+    }
+}
+
+/// Length-prefixed frames: 1 byte type + 4 byte big-endian length + payload.
+public enum TransferCodec {
+    public static let maxPayloadSize = 16 * 1024 * 1024
+
+    public static func encode(_ frame: WireFrame) throws -> Data {
+        guard frame.payload.count <= maxPayloadSize else {
+            throw CodecError.payloadTooLarge(frame.payload.count)
+        }
+        var data = Data()
+        data.append(frame.type.rawValue)
+        var length = UInt32(frame.payload.count).bigEndian
+        withUnsafeBytes(of: &length) { data.append(contentsOf: $0) }
+        data.append(frame.payload)
+        return data
+    }
+
+    public static func decode(from buffer: inout Data) throws -> WireFrame? {
+        guard buffer.count >= 5 else { return nil }
+        let typeByte = buffer[buffer.startIndex]
+        guard let type = FrameType(rawValue: typeByte) else {
+            throw CodecError.unknownFrameType(typeByte)
+        }
+        let lengthBytes = buffer.subdata(in: buffer.startIndex.advanced(by: 1)..<buffer.startIndex.advanced(by: 5))
+        let length = lengthBytes.withUnsafeBytes { $0.load(as: UInt32.self).bigEndian }
+        guard length <= maxPayloadSize else {
+            throw CodecError.payloadTooLarge(Int(length))
+        }
+        let total = 5 + Int(length)
+        guard buffer.count >= total else { return nil }
+        let payload = buffer.subdata(in: buffer.startIndex.advanced(by: 5)..<buffer.startIndex.advanced(by: total))
+        buffer.removeSubrange(buffer.startIndex..<buffer.startIndex.advanced(by: total))
+        return WireFrame(type: type, payload: payload)
+    }
+
+    public static func encodeJSON<T: Encodable>(_ type: FrameType, _ value: T) throws -> Data {
+        let payload = try JSONEncoder.watari.encode(value)
+        return try encode(WireFrame(type: type, payload: payload))
+    }
+
+    public static func decodeJSON<T: Decodable>(_ frame: WireFrame, as: T.Type) throws -> T {
+        try JSONDecoder.watari.decode(T.self, from: frame.payload)
+    }
+}
+
+public enum CodecError: Error, Equatable, Sendable {
+    case payloadTooLarge(Int)
+    case unknownFrameType(UInt8)
+}
+
+public struct HelloPayload: Codable, Sendable, Equatable {
+    public var protocolVersion: Int
+    public var appVersion: String
+    public var displayName: String
+    public var publicKey: Data
+
+    public init(protocolVersion: Int = 1, appVersion: String, displayName: String, publicKey: Data) {
+        self.protocolVersion = protocolVersion
+        self.appVersion = appVersion
+        self.displayName = displayName
+        self.publicKey = publicKey
+    }
+}
+
+public struct JobManifestPayload: Codable, Sendable, Equatable {
+    public var jobId: String
+    public var policy: PermissionPolicy
+    public var fileCount: Int
+    public var totalBytes: UInt64
+
+    public init(jobId: String, policy: PermissionPolicy, fileCount: Int, totalBytes: UInt64) {
+        self.jobId = jobId
+        self.policy = policy
+        self.fileCount = fileCount
+        self.totalBytes = totalBytes
+    }
+}
+
+public struct FileHeaderPayload: Codable, Sendable, Equatable {
+    public var metadata: FileMetadata
+
+    public init(metadata: FileMetadata) {
+        self.metadata = metadata
+    }
+}
+
+/// In-memory transport for Linux tests — not used on the wire in production.
+public actor InMemoryTransport {
+    private var aToB = Data()
+    private var bToA = Data()
+
+    public init() {}
+
+    public func sendAtoB(_ data: Data) {
+        aToB.append(data)
+    }
+
+    public func sendBtoA(_ data: Data) {
+        bToA.append(data)
+    }
+
+    public func receiveB() throws -> WireFrame? {
+        try TransferCodec.decode(from: &aToB)
+    }
+
+    public func receiveA() throws -> WireFrame? {
+        try TransferCodec.decode(from: &bToA)
+    }
+}
+
+extension JSONEncoder {
+    static var watari: JSONEncoder {
+        let e = JSONEncoder()
+        e.dateEncodingStrategy = .iso8601
+        e.dataEncodingStrategy = .base64
+        return e
+    }
+}
+
+extension JSONDecoder {
+    static var watari: JSONDecoder {
+        let d = JSONDecoder()
+        d.dateDecodingStrategy = .iso8601
+        d.dataDecodingStrategy = .base64
+        return d
+    }
+}

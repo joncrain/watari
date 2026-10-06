@@ -1,0 +1,14 @@
+.DS_Store
+/.build
+/Packages
+/*.xcodeproj
+/*.xcworkspace
+xcuserdata/
+DerivedData/
+.swiftpm/
+.netrc
+.idea/
+*.pem
+*.p12
+App/Generated/
+*.mobileprovision
