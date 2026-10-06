@@ -58,7 +58,35 @@ public enum PermissionExceptionCode: String, Codable, Sendable, Equatable {
     case quarantineStripped
     case ownerRemapped
     case ownerKeepRequiresAdmin
+    case ownerVerifyFailed
     case xattrDropped
+}
+
+/// Post-write check that remapped ownership stuck on the destination.
+public enum OwnerVerification {
+    public static func verify(
+        relativePath: String,
+        actualUID: UInt32?,
+        expectedUID: UInt32,
+        remapping: Bool
+    ) -> PermissionException? {
+        guard remapping else { return nil }
+        guard let actualUID else {
+            return PermissionException(
+                relativePath: relativePath,
+                code: .ownerVerifyFailed,
+                detail: "Could not read destination owner after apply"
+            )
+        }
+        guard actualUID == expectedUID else {
+            return PermissionException(
+                relativePath: relativePath,
+                code: .ownerVerifyFailed,
+                detail: "Destination uid \(actualUID) != receiving uid \(expectedUID)"
+            )
+        }
+        return nil
+    }
 }
 
 public struct PermissionException: Codable, Sendable, Equatable {

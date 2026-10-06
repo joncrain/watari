@@ -6,17 +6,18 @@ struct WatariApp: App {
     @StateObject private var appModel = AppModel()
 
     var body: some Scene {
-        WindowGroup {
+        WindowGroup("Watari") {
             RootView()
                 .environmentObject(appModel)
-                .frame(minWidth: 880, minHeight: 560)
+                .frame(minWidth: 640, minHeight: 520)
+                .onAppear {
+                    appModel.bootstrapOfferedWhitelist()
+                    appModel.refreshListener()
+                }
         }
         .commands {
             CommandGroup(replacing: .newItem) {}
             CommandMenu("Job") {
-                Button("Preview") { appModel.preview() }
-                    .keyboardShortcut("p", modifiers: [.command])
-                    .disabled(!appModel.canPreview)
                 Button("Start") { appModel.start() }
                     .keyboardShortcut("r", modifiers: [.command])
                     .disabled(!appModel.canStart)

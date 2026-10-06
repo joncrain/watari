@@ -31,7 +31,7 @@ public struct NetworkConfig: Codable, Sendable, Equatable {
         listenPort: Int = 59234,
         bindMode: BindMode = .lan,
         bindAddress: String? = nil,
-        discoveryMode: DiscoveryMode = .explicit,
+        discoveryMode: DiscoveryMode = .nearby,
         bandwidthLimitBytesPerSecond: UInt64 = 0,
         idleTimeoutSeconds: Int = 120,
         maxConcurrentTransfers: Int = 4

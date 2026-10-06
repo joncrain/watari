@@ -13,6 +13,13 @@ public enum FrameType: UInt8, Codable, Sendable {
     case error = 9
     case ping = 10
     case pong = 11
+    case inventoryRequest = 12
+    case inventoryResponse = 13
+    /// Destination asks source what roots it offers (names + index totals).
+    case offerCatalogRequest = 14
+    case offerCatalogResponse = 15
+    /// Destination asks source to push the named roots to this connection.
+    case pullRequest = 16
 }
 
 public struct WireFrame: Sendable, Equatable {
@@ -48,7 +55,13 @@ public enum TransferCodec {
             throw CodecError.unknownFrameType(typeByte)
         }
         let lengthBytes = buffer.subdata(in: buffer.startIndex.advanced(by: 1)..<buffer.startIndex.advanced(by: 5))
-        let length = lengthBytes.withUnsafeBytes { $0.load(as: UInt32.self).bigEndian }
+        let length = lengthBytes.withUnsafeBytes { raw -> UInt32 in
+            var value: UInt32 = 0
+            Swift.withUnsafeMutableBytes(of: &value) { dest in
+                dest.copyMemory(from: UnsafeRawBufferPointer(rebasing: raw.prefix(4)))
+            }
+            return UInt32(bigEndian: value)
+        }
         guard length <= maxPayloadSize else {
             throw CodecError.payloadTooLarge(Int(length))
         }
@@ -91,12 +104,20 @@ public struct HelloPayload: Codable, Sendable, Equatable {
 public struct JobManifestPayload: Codable, Sendable, Equatable {
     public var jobId: String
     public var policy: PermissionPolicy
+    public var conflict: ConflictPolicy
     public var fileCount: Int
     public var totalBytes: UInt64
 
-    public init(jobId: String, policy: PermissionPolicy, fileCount: Int, totalBytes: UInt64) {
+    public init(
+        jobId: String,
+        policy: PermissionPolicy,
+        conflict: ConflictPolicy = .default,
+        fileCount: Int,
+        totalBytes: UInt64
+    ) {
         self.jobId = jobId
         self.policy = policy
+        self.conflict = conflict
         self.fileCount = fileCount
         self.totalBytes = totalBytes
     }
@@ -107,6 +128,111 @@ public struct FileHeaderPayload: Codable, Sendable, Equatable {
 
     public init(metadata: FileMetadata) {
         self.metadata = metadata
+    }
+}
+
+/// Sender asks the peer what already exists under these job root display names.
+public struct InventoryRequestPayload: Codable, Sendable, Equatable {
+    public var rootNames: [String]
+
+    public init(rootNames: [String]) {
+        self.rootNames = rootNames
+    }
+}
+
+/// Peer replies with scanned destination metadata (hashes + owners) for Preview.
+public struct InventoryResponsePayload: Codable, Sendable, Equatable {
+    public var entries: [FileMetadata]
+
+    public init(entries: [FileMetadata]) {
+        self.entries = entries
+    }
+
+    public var asDestinationMap: [String: FileMetadata] {
+        Dictionary(entries.map { ($0.relativePath, $0) }, uniquingKeysWith: { _, last in last })
+    }
+}
+
+/// One folder the source Mac is willing to send.
+public struct OfferedRoot: Codable, Sendable, Equatable, Identifiable, Hashable {
+    public var name: String
+    public var path: String
+    public var totalBytes: UInt64
+    public var entryCount: Int
+
+    public var id: String { path.isEmpty ? name : path }
+
+    public init(name: String, path: String, totalBytes: UInt64, entryCount: Int) {
+        self.name = name
+        self.path = path
+        self.totalBytes = totalBytes
+        self.entryCount = entryCount
+    }
+}
+
+public struct OfferCatalogRequestPayload: Codable, Sendable, Equatable {
+    public var protocolVersion: Int
+
+    public init(protocolVersion: Int = 1) {
+        self.protocolVersion = protocolVersion
+    }
+}
+
+/// One pinned Dock app from the source Mac (layout preview / future apply).
+public struct DockAppOffer: Codable, Sendable, Equatable, Identifiable, Hashable {
+    public var bundlePath: String
+    public var displayName: String
+
+    public var id: String { bundlePath }
+
+    public init(bundlePath: String, displayName: String) {
+        self.bundlePath = bundlePath
+        self.displayName = displayName
+    }
+}
+
+public struct OfferCatalogResponsePayload: Codable, Sendable, Equatable {
+    public var displayName: String
+    public var roots: [OfferedRoot]
+    /// Source Mac Dock `persistent-apps` projection (optional; older peers omit).
+    public var dockApps: [DockAppOffer]
+
+    public init(
+        displayName: String,
+        roots: [OfferedRoot],
+        dockApps: [DockAppOffer] = []
+    ) {
+        self.displayName = displayName
+        self.roots = roots
+        self.dockApps = dockApps
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case displayName, roots, dockApps
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        displayName = try c.decode(String.self, forKey: .displayName)
+        roots = try c.decode([OfferedRoot].self, forKey: .roots)
+        dockApps = try c.decodeIfPresent([DockAppOffer].self, forKey: .dockApps) ?? []
+    }
+}
+
+/// Destination asks the source to push these offered root display names.
+public struct PullRequestPayload: Codable, Sendable, Equatable {
+    public var rootNames: [String]
+    public var policy: PermissionPolicy
+    public var conflict: ConflictPolicy
+
+    public init(
+        rootNames: [String],
+        policy: PermissionPolicy = .default,
+        conflict: ConflictPolicy = .default
+    ) {
+        self.rootNames = rootNames
+        self.policy = policy
+        self.conflict = conflict
     }
 }
 

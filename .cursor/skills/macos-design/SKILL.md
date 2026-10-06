@@ -7,11 +7,10 @@ description: Use when designing or reviewing Watari's macOS interface structure 
 
 ## Structure
 
-- Use a **NavigationSplitView** (sidebar + detail + optional inspector), not a phone tab bar stretched to desktop.
-- Provide **Show/Hide Sidebar** via View menu / toolbar; do not hide the sidebar by default.
+- **Default window:** one focused transfer panel (Migration Assistant calm) — centered title, **Folders** tree (whitelist + Add folder…) and a separate **Services** section, footer summary. Sidebar and inspector exist but stay **hidden/collapsed by default**.
 - Put app preferences in a **Settings** scene (standard Settings menu item), not a fake System Settings clone.
-- Group Settings with `TabView` tabs: General, Network, Permissions, Exclusions.
-- Primary actions live in the **toolbar**: Preview, Start, Stop.
+- Group Settings with `TabView` tabs: General, Permissions (incl. conflict + Advanced), Exclusions, DLP.
+- Primary actions live in a **minimal toolbar**: Preview / Start when a peer is ready; Connect otherwise.
 - Use a **sheet** for Connect (host/port first; Nearby as a second tab when Bonjour is enabled).
 
 ## System citizenship

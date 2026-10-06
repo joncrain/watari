@@ -4,6 +4,7 @@ public enum PreviewAction: String, Codable, Sendable, Equatable {
     case unchanged
     case copy
     case update
+    case keepBoth
     case skip
 }
 
@@ -15,6 +16,7 @@ public enum SkipReason: String, Codable, Sendable, Equatable {
     case tccDenied
     case unreadable
     case dlp
+    case conflict
 }
 
 public struct PreviewItem: Codable, Sendable, Equatable {
@@ -46,6 +48,7 @@ public struct PreviewSummary: Codable, Sendable, Equatable {
     public var unchanged: Int
     public var copy: Int
     public var update: Int
+    public var keepBoth: Int
     public var skip: Int
     public var permissionExceptionCount: Int
     public var items: [PreviewItem]
@@ -55,6 +58,7 @@ public struct PreviewSummary: Codable, Sendable, Equatable {
         self.unchanged = items.filter { $0.action == .unchanged }.count
         self.copy = items.filter { $0.action == .copy }.count
         self.update = items.filter { $0.action == .update }.count
+        self.keepBoth = items.filter { $0.action == .keepBoth }.count
         self.skip = items.filter { $0.action == .skip }.count
         self.permissionExceptionCount = items.reduce(0) { $0 + $1.permissionExceptions.count }
     }
@@ -68,10 +72,15 @@ public enum PreviewDiff {
         denylist: Denylist = Denylist(),
         skipped: [(path: String, reason: SkipReason)] = [],
         policy: PermissionPolicy = .default,
+        conflict: ConflictPolicy = .default,
         dlp: DLPPolicy = .disabled,
         receiving: ReceivingIdentity
     ) -> PreviewSummary {
         var items: [PreviewItem] = []
+        var taken = Set(destinations.keys)
+        for source in sources {
+            taken.insert(source.relativePath)
+        }
 
         for skip in skipped {
             items.append(
@@ -123,15 +132,48 @@ public enum PreviewDiff {
                         )
                     )
                 } else {
-                    items.append(
-                        PreviewItem(
-                            relativePath: source.relativePath,
-                            action: .update,
-                            source: source,
-                            destination: dest,
-                            permissionExceptions: applied.exceptions
+                    switch conflict {
+                    case .keepBoth:
+                        let renamed = KeepBothPath.allocate(source.relativePath, taken: taken)
+                        taken.insert(renamed)
+                        var renamedSource = source
+                        renamedSource.relativePath = renamed
+                        let renamedApplied = PermissionPolicyEngine.apply(
+                            renamedSource,
+                            policy: policy,
+                            receiving: receiving
                         )
-                    )
+                        items.append(
+                            PreviewItem(
+                                relativePath: renamed,
+                                action: .keepBoth,
+                                source: renamedSource,
+                                destination: dest,
+                                permissionExceptions: renamedApplied.exceptions
+                            )
+                        )
+                    case .update:
+                        items.append(
+                            PreviewItem(
+                                relativePath: source.relativePath,
+                                action: .update,
+                                source: source,
+                                destination: dest,
+                                permissionExceptions: applied.exceptions
+                            )
+                        )
+                    case .skip:
+                        items.append(
+                            PreviewItem(
+                                relativePath: source.relativePath,
+                                action: .skip,
+                                skipReason: .conflict,
+                                source: source,
+                                destination: dest,
+                                permissionExceptions: applied.exceptions
+                            )
+                        )
+                    }
                 }
             } else {
                 items.append(
@@ -150,6 +192,10 @@ public enum PreviewDiff {
     }
 
     private static func sameContent(_ a: FileMetadata, _ b: FileMetadata) -> Bool {
+        // Same folder on destination → merge (directory entry itself is not a content conflict).
+        if a.isDirectory && b.isDirectory {
+            return true
+        }
         if let fa = a.contentFingerprint, let fb = b.contentFingerprint {
             return fa == fb && a.isDirectory == b.isDirectory && a.isSymlink == b.isSymlink
         }

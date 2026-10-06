@@ -1,34 +1,65 @@
 import SwiftUI
-import WatariCore
 
 struct RootView: View {
     @EnvironmentObject private var model: AppModel
-    @State private var columnVisibility = NavigationSplitViewVisibility.all
+    /// Custom sidebar — avoid NavigationSplitView’s system `>>` toggle.
+    @State private var showSidebar = false
+    @State private var showInspector = false
 
     var body: some View {
-        NavigationSplitView(columnVisibility: $columnVisibility) {
-            SidebarView()
-        } detail: {
+        HStack(spacing: 0) {
+            if showSidebar {
+                SidebarView()
+                    .frame(width: 220)
+                    .background(.background)
+                Divider()
+            }
+
             DetailView()
-        }
-        .inspector(isPresented: .constant(true)) {
-            InspectorView()
-                .inspectorColumnWidth(min: 220, ideal: 260, max: 320)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+
+            if showInspector {
+                Divider()
+                InspectorView()
+                    .frame(width: 260)
+                    .background(.background)
+            }
         }
         .toolbar {
-            ToolbarItemGroup(placement: .primaryAction) {
-                Button("Preview", systemImage: "list.bullet.rectangle") { model.preview() }
-                    .disabled(!model.canPreview)
-                    .help("Preview what will copy")
-                Button("Start", systemImage: "play.fill") { model.start() }
-                    .disabled(!model.canStart)
-                    .help("Start transfer")
-                Button("Stop", systemImage: "stop.fill") { model.stop() }
-                    .disabled(!model.canStop)
-                    .help("Stop transfer")
+            ToolbarItem(placement: .navigation) {
+                Button {
+                    showSidebar.toggle()
+                } label: {
+                    Label(showSidebar ? "Hide Sidebar" : "Show Sidebar", systemImage: "sidebar.left")
+                }
+                .help(showSidebar ? "Hide sidebar" : "Show sidebar")
             }
-            ToolbarItem(placement: .primaryAction) {
-                Button("Connect", systemImage: "link") { model.showConnectSheet = true }
+
+            ToolbarItemGroup(placement: .primaryAction) {
+                if model.selectedPeerID != nil, model.phase != .transferComplete, !model.shouldShowSourcePrep {
+                    Button("Start", systemImage: "play.fill") { model.start() }
+                        .disabled(!model.canStart)
+                        .help(model.startBlockedReason ?? "Run the transfer plan (folders and checked Services)")
+                    if model.canStop {
+                        Button("Stop", systemImage: "stop.fill") { model.stop() }
+                            .help("Stop transfer")
+                    }
+                    Button("Connect", systemImage: "link") { model.showConnectSheet = true }
+                        .help("Connect or change peer")
+                } else if !model.shouldShowSourcePrep {
+                    Button("Connect", systemImage: "link") { model.showConnectSheet = true }
+                        .help("Connect to a source Mac")
+                }
+
+                Button {
+                    showInspector.toggle()
+                } label: {
+                    Label(
+                        showInspector ? "Hide Inspector" : "Show Inspector",
+                        systemImage: "sidebar.trailing"
+                    )
+                }
+                .help(showInspector ? "Hide inspector" : "Show inspector")
             }
         }
         .sheet(isPresented: $model.showConnectSheet) {

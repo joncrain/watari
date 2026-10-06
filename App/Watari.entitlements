@@ -8,6 +8,22 @@
 	<true/>
 	<key>com.apple.security.files.bookmarks.app-scope</key>
 	<true/>
+	<key>com.apple.security.temporary-exception.files.home-relative-path.read-write</key>
+	<array>
+		<string>/Desktop/</string>
+		<string>/Documents/</string>
+		<string>/Downloads/</string>
+		<string>/Pictures/</string>
+		<string>/Movies/</string>
+		<string>/Music/</string>
+		<string>/Public/</string>
+		<string>/Library/Preferences/com.apple.dock.plist</string>
+	</array>
+	<!-- Read source Dock in offer catalog; write destination Dock on Start. -->
+	<key>com.apple.security.temporary-exception.shared-preference.read-write</key>
+	<array>
+		<string>com.apple.dock</string>
+	</array>
 	<key>com.apple.security.network.client</key>
 	<true/>
 	<key>com.apple.security.network.server</key>
