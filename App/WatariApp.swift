@@ -9,7 +9,7 @@ struct WatariApp: App {
         WindowGroup("Watari") {
             RootView()
                 .environmentObject(appModel)
-                .frame(minWidth: 880, minHeight: 560)
+                .frame(minWidth: 640, minHeight: 520)
                 .onAppear { appModel.refreshListener() }
         }
         .commands {

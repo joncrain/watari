@@ -44,13 +44,33 @@ struct SettingsView: View {
             }
             Tab("Permissions", systemImage: "person.badge.key") {
                 Form {
-                    Toggle("Remap owner to receiving user", isOn: $model.policy.remapOwnerToReceivingUser)
-                    Toggle("Strip quarantine", isOn: $model.policy.stripQuarantine)
-                    Toggle("Keep ACLs when valid", isOn: $model.policy.keepACLs)
+                    Section("Conflict strategy") {
+                        Picker("When hashes differ", selection: $model.conflict) {
+                            Text("Keep both").tag(ConflictPolicy.keepBoth)
+                            Text("Update").tag(ConflictPolicy.update)
+                            Text("Skip").tag(ConflictPolicy.skip)
+                        }
+                        Text("Chosen at job start. Default is Keep both.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    Section("Ownership") {
+                        Toggle("Remap owner to receiving user", isOn: $model.policy.remapOwnerToReceivingUser)
+                        Toggle("Strip quarantine", isOn: $model.policy.stripQuarantine)
+                        Toggle("Keep ACLs when valid", isOn: $model.policy.keepACLs)
+                    }
+                    .disabled(ManagedDefaults.lockPermissionPolicy)
+                    DisclosureGroup("Advanced") {
+                        Toggle("Keep mode bits", isOn: $model.policy.keepMode)
+                        Toggle("Keep other xattrs", isOn: $model.policy.keepExtendedAttributes)
+                        Toggle("Keep Finder flags", isOn: $model.policy.keepFinderFlags)
+                        Button("Export exception log…") { model.exportExceptionLog() }
+                            .disabled(model.previewSummary == nil && model.jobLog.events.isEmpty)
+                    }
+                    .disabled(ManagedDefaults.lockPermissionPolicy)
                 }
                 .formStyle(.grouped)
                 .frame(width: 420)
-                .disabled(ManagedDefaults.lockPermissionPolicy)
             }
             Tab("Exclusions", systemImage: "eye.slash") {
                 Form {

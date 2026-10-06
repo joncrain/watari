@@ -9,7 +9,7 @@ Operate mode: the person completes a backup job. Scanability and native affordan
 
 ## Quality bar
 
-- Hierarchy: sidebar orientation → main task → inspector policy.
+- Hierarchy: transfer panel first (title → tree → footer); policy lives in Settings.
 - Every required state in DESIGN.md must be a real, reachable UI (not a TODO placeholder in shipping paths).
 - Permission copy names the consequence (“files will belong to *this* Mac’s user”) next to the control.
 - Exception counts are visible after Preview and after the job; drill-in lists paths and reason codes.

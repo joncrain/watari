@@ -57,7 +57,7 @@ Not Migration Assistant. Not cloud sync. A calm, first-party-feeling Mac utility
 
 - **Name:** Watari (渡り). Pronounce roughly “wah-tah-ree.”
 - **Voice:** Calm, precise, admin-readable. Explain permissions before system prompts. No startup hype.
-- **Visual:** Native macOS utility — system materials, SF Symbols, user accent color, semantic colors. Polish in states and copy, not a custom SaaS brand skin.
+- **Visual:** Native macOS utility — Migration Assistant calm (single transfer panel), system materials, SF Symbols, user accent color, semantic colors. Brand in the window title; polish in states and copy, not a custom SaaS brand skin.
 - **Family:** Genkan = threshold; Watari = crossing / connecting corridor.
 
 ## Product Principles
