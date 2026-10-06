@@ -11,20 +11,22 @@ struct SettingsView: View {
                     Text("Watari copies chosen folders only. It does not migrate accounts, apps, or MDM profiles.")
                         .foregroundStyle(.secondary)
                     Section("Receive (this Mac is the destination)") {
-                        HStack {
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text("Receive into")
-                                Text(model.receiveFolder?.path ?? "Choose where pulled folders arrive")
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
-                                    .lineLimit(2)
-                            }
-                            Spacer()
-                            Button("Choose…") { model.chooseReceiveFolder() }
-                        }
-                        Text("Required on the Mac that pulls folders.")
+                        Text("By default, pulled folders map into the same place under your home directory as on the source (Desktop → Desktop). Ownership remaps to you.")
                             .font(.caption)
                             .foregroundStyle(.secondary)
+                        if let receive = model.receiveFolder {
+                            Text("Advanced override: \(receive.path)")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                                .lineLimit(2)
+                            Button("Clear override (use home mapping)") { model.clearReceiveFolderOverride() }
+                        }
+                        DisclosureGroup("Advanced receive folder…") {
+                            Button("Choose parent folder…") { model.chooseReceiveFolder() }
+                            Text("Optional single parent; offered roots become subfolders there.")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
                     }
                     Section("Offer (this Mac is the source)") {
                         Toggle("Listen for peers", isOn: $model.network.listenEnabled)

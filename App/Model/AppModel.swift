@@ -75,7 +75,6 @@ final class AppModel: ObservableObject {
     var canPreview: Bool {
         selectedPeerID != nil
             && !selectedOfferNames.isEmpty
-            && receiveFolder != nil
             && phase != .copying
             && phase != .needsConnect
     }
@@ -83,7 +82,6 @@ final class AppModel: ObservableObject {
     /// Start pulls selected folders; Preview is optional but recommended.
     var canStart: Bool {
         selectedPeerID != nil
-            && receiveFolder != nil
             && !selectedOfferNames.isEmpty
             && phase != .copying
             && phase != .needsConnect
@@ -99,7 +97,6 @@ final class AppModel: ObservableObject {
         if phase == .copying { return "Transfer in progress." }
         if selectedPeerID == nil || phase == .needsConnect { return "Connect to a source Mac first." }
         if selectedOfferNames.isEmpty { return "Select at least one folder to transfer." }
-        if receiveFolder == nil { return "Choose a receive folder on this Mac." }
         return nil
     }
 
@@ -109,12 +106,43 @@ final class AppModel: ObservableObject {
         if phase == .copying { return "Transfer in progress." }
         if selectedPeerID == nil || phase == .needsConnect { return "Connect to a source Mac first." }
         if selectedOfferNames.isEmpty { return "Select at least one folder to transfer." }
-        if receiveFolder == nil { return "Choose a receive folder on this Mac." }
         return nil
+    }
+
+    var usesHomeReceiveMapping: Bool { receiveFolder == nil }
+
+    var destinationHomeURL: URL {
+        FileManager.default.homeDirectoryForCurrentUser.standardizedFileURL
+    }
+
+    /// Selected offers mapped onto this Mac (home-relative by default).
+    func effectiveDestinationRoots() -> [String: URL] {
+        let selected = peerOffers.filter { selectedOfferNames.contains($0.name) }
+        let override = receiveFolder.map { URL(fileURLWithPath: $0.path, isDirectory: true) }
+        return HomePathMapper.destinationRoots(
+            offers: selected,
+            destinationHome: destinationHomeURL,
+            overrideParent: override
+        )
+    }
+
+    func receiveMappingLabels() -> [(name: String, destinationPath: String)] {
+        let selected = peerOffers.filter { selectedOfferNames.contains($0.name) }
+        let override = receiveFolder.map { URL(fileURLWithPath: $0.path, isDirectory: true) }
+        return HomePathMapper.mappingLabels(
+            offers: selected,
+            destinationHome: destinationHomeURL,
+            overrideParent: override
+        )
     }
 
     func offeredBytes(for folder: BookmarkEntry) -> UInt64 {
         fileIndex.totalBytes(rootPath: folder.path)
+    }
+
+    func clearReceiveFolderOverride() {
+        receiveFolder = nil
+        statusMessage = "Receiving into matching folders under your home directory."
     }
 
     var selectedPeer: PeerRecord? {
@@ -272,12 +300,12 @@ final class AppModel: ObservableObject {
 
     func chooseReceiveFolder() {
         guard let url = bookmarkStore.pickFolder(
-            message: "Choose where transferred folders should arrive on this Mac."
+            message: "Advanced: choose a single parent folder. Offered roots arrive as subfolders here instead of matching your home layout."
         ) else { return }
         do {
             receiveFolder = try bookmarkStore.save(url: url)
             refreshListener()
-            statusMessage = "Receive into \(url.lastPathComponent)."
+            statusMessage = "Advanced receive override: \(url.lastPathComponent)."
         } catch {
             lastError = error.localizedDescription
         }
@@ -345,14 +373,9 @@ final class AppModel: ObservableObject {
 
                 var destinations: [String: FileMetadata] = [:]
                 var inventoryOK = true
-                if let receive = await MainActor.run(body: { self.receiveFolder }) {
-                    let access = try bookmarkStore.startAccessRefreshing(receive)
-                    defer { bookmarkStore.stopAccess(to: access.url) }
-                    let local = try DestinationInventory.scan(
-                        destinationRoot: access.url,
-                        rootNames: rootNames,
-                        denylist: Denylist()
-                    )
+                let roots = await MainActor.run { self.effectiveDestinationRoots() }
+                if !roots.isEmpty {
+                    let local = try DestinationInventory.scan(roots: roots, denylist: Denylist())
                     destinations = InventoryResponsePayload(entries: local).asDestinationMap
                 }
 
@@ -391,30 +414,48 @@ final class AppModel: ObservableObject {
     }
 
     func start() {
-        guard canStart, let peer = selectedPeer, let receive = receiveFolder else {
+        guard canStart, let peer = selectedPeer else {
             lastError = startBlockedReason ?? "Can’t start transfer yet."
             return
         }
         let rootNames = Array(selectedOfferNames).sorted()
+        let destinationRoots = effectiveDestinationRoots()
+        guard !destinationRoots.isEmpty else {
+            lastError = "No destination folders to receive into."
+            return
+        }
+        // Ensure remap-to-receiving-user stays the default ownership story on apply.
+        if !policy.remapOwnerToReceivingUser {
+            statusMessage = "Pulling with source ownership preserved (advanced)."
+        }
         phase = .copying
         statusMessage = "Pulling from \(peer.displayName)…"
         progressFraction = 0
         let conflictPolicy = conflict
         let permissionPolicy = policy
+        let overrideEntry = receiveFolder
+        let indexRootPath = overrideEntry?.path ?? destinationHomeURL.path
         Task {
             do {
-                let access = try bookmarkStore.startAccessRefreshing(receive)
-                defer { bookmarkStore.stopAccess(to: access.url) }
-                if access.didRefresh {
-                    await MainActor.run { self.receiveFolder = access.entry }
+                var overrideAccessURL: URL?
+                if let overrideEntry {
+                    let access = try bookmarkStore.startAccessRefreshing(overrideEntry)
+                    overrideAccessURL = access.url
+                    if access.didRefresh {
+                        await MainActor.run { self.receiveFolder = access.entry }
+                    }
                 }
-                let receivePath = access.entry.path
+                defer {
+                    if let overrideAccessURL {
+                        bookmarkStore.stopAccess(to: overrideAccessURL)
+                    }
+                }
                 try await transfer.pull(
                     rootNames: rootNames,
                     peer: peer,
                     policy: permissionPolicy,
                     conflict: conflictPolicy,
-                    receiveRoot: access.url,
+                    destinationRoots: destinationRoots,
                     connector: peerConnector,
                     applier: permissionApplier,
                     onIndexUpdate: { [weak self] received in
@@ -422,7 +463,7 @@ final class AppModel: ObservableObject {
                             guard let self else { return }
                             ReceiveIndex.upsert(
                                 &self.fileIndex,
-                                destinationRootPath: receivePath,
+                                destinationRootPath: indexRootPath,
                                 received: received
                             )
                             self.persistIndex()

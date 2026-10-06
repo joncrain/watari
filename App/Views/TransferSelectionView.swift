@@ -225,24 +225,46 @@ struct TransferSelectionView: View {
             .foregroundStyle(.secondary)
     }
 
-    /// Receive folder + Preview / Start — visible in the panel, not only the toolbar.
+    /// Home mapping (default) or advanced single-parent override + Preview / Start.
     private var receiveAndActions: some View {
         VStack(alignment: .leading, spacing: 10) {
-            HStack(alignment: .firstTextBaseline) {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("Receive into")
-                        .font(.subheadline.weight(.medium))
-                    Text(model.receiveFolder?.path ?? "Choose where folders arrive on this Mac")
-                        .font(.caption)
-                        .foregroundStyle(model.receiveFolder == nil ? .orange : .secondary)
-                        .lineLimit(2)
-                        .truncationMode(.middle)
+            Text("Receive on this Mac")
+                .font(.subheadline.weight(.medium))
+
+            if model.usesHomeReceiveMapping {
+                Text("Folders land in the same place under your home directory as on the source (for example Desktop → Desktop). Ownership remaps to your user.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                if !model.selectedOfferNames.isEmpty {
+                    VStack(alignment: .leading, spacing: 4) {
+                        ForEach(model.receiveMappingLabels(), id: \.name) { row in
+                            Text("\(row.name) → \(row.destinationPath)")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                                .lineLimit(1)
+                                .truncationMode(.middle)
+                        }
+                    }
                 }
-                Spacer(minLength: 12)
-                Button(model.receiveFolder == nil ? "Choose…" : "Change…") {
+            } else {
+                Text("Advanced override: \(model.receiveFolder?.path ?? "")")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(2)
+                    .truncationMode(.middle)
+                Button("Use home mapping") { model.clearReceiveFolderOverride() }
+                    .font(.caption)
+            }
+
+            DisclosureGroup("Advanced receive folder…") {
+                Text("Optional. Pick a single parent folder; each offered root becomes a subfolder there instead of matching your home layout.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Button(model.receiveFolder == nil ? "Choose parent folder…" : "Change parent folder…") {
                     model.chooseReceiveFolder()
                 }
             }
+            .font(.caption)
 
             HStack(spacing: 12) {
                 Button("Preview") { model.preview() }

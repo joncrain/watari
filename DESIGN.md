@@ -18,7 +18,7 @@ Native Mac tool in the spirit of first-party utilities — Migration Assistant c
 ## Composition
 
 - **First screen (prep):** **Offer from this Mac** when Listen is on — catalog of offered folders, **Add folder…**, Listen toggle. Below: **Pull from another Mac** (Nearby / host-port). Source owns the offer list; destination only selects what to pull.
-- **After connect (destination):** **Folders** checklist from the **source Mac’s offer catalog** (sizes from that Mac’s `LocalFileIndex`). Receive-into + **Preview** / **Start** in the panel (and toolbar). **Services** section below (Coming soon).
+- **After connect (destination):** **Folders** checklist from the **source Mac’s offer catalog**. Default receive = **home mapping** (same relative path under this user’s home). Advanced optional parent override. **Preview** / **Start** in the panel (and toolbar). **Services** section below (Coming soon).
 - **Sidebar + inspector:** Hidden/collapsed by default; reveal via toolbar.
 - **Toolbar:** Connect; after peer — Preview / Start (pull) / Stop; sidebar/inspector toggles.
 - **Settings:** Receive folder; Listen/port + same offer list for power users.

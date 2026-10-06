@@ -86,13 +86,13 @@ final class TransferSession: @unchecked Sendable {
         return try TransferCodec.decodeJSON(frame, as: OfferCatalogResponsePayload.self)
     }
 
-    /// Destination-primary: ask the source to push selected roots into `receiveRoot`.
+    /// Destination-primary: ask the source to push selected roots into mapped destination folders.
     func pull(
         rootNames: [String],
         peer: PeerRecord,
         policy: PermissionPolicy,
         conflict: ConflictPolicy,
-        receiveRoot: URL,
+        destinationRoots: [String: URL],
         connector: PeerConnector,
         applier: PermissionApplier,
         onIndexUpdate: @escaping @Sendable ([FileMetadata]) -> Void,
@@ -113,7 +113,7 @@ final class TransferSession: @unchecked Sendable {
             firstFrame: nil,
             on: connection,
             buffer: FrameBuffer(),
-            destinationRoot: receiveRoot,
+            destinationRoots: destinationRoots,
             policy: policy,
             applier: applier,
             onIndexUpdate: onIndexUpdate,
@@ -334,7 +334,8 @@ final class TransferSession: @unchecked Sendable {
                 firstFrame: frame,
                 on: connection,
                 buffer: buffer,
-                destinationRoot: receiveRoot,
+                destinationRoots: [:],
+                fallbackDestinationParent: receiveRoot,
                 applier: applier,
                 onIndexUpdate: onIndexUpdate,
                 progress: progress
@@ -469,7 +470,7 @@ final class TransferSession: @unchecked Sendable {
         progress(1, "Complete")
     }
 
-    /// Receiver side: read frames and write files under destinationRoot.
+    /// Receiver side: read frames and write files under a single parent (legacy push).
     func receive(
         on connection: NWConnection,
         destinationRoot: URL,
@@ -484,7 +485,8 @@ final class TransferSession: @unchecked Sendable {
             firstFrame: nil,
             on: connection,
             buffer: FrameBuffer(),
-            destinationRoot: destinationRoot,
+            destinationRoots: [:],
+            fallbackDestinationParent: destinationRoot,
             policy: policy,
             applier: applier,
             onIndexUpdate: onIndexUpdate ?? { _ in },
@@ -496,7 +498,8 @@ final class TransferSession: @unchecked Sendable {
         firstFrame: WireFrame?,
         on connection: NWConnection,
         buffer: FrameBuffer,
-        destinationRoot: URL,
+        destinationRoots: [String: URL],
+        fallbackDestinationParent: URL? = nil,
         policy: PermissionPolicy = .default,
         applier: PermissionApplier,
         onIndexUpdate: @escaping @Sendable ([FileMetadata]) -> Void,
@@ -515,6 +518,16 @@ final class TransferSession: @unchecked Sendable {
             fileHandle = nil
         }
 
+        func destinationURL(for relativePath: String) throws -> URL {
+            if let resolved = TransferPaths.resolve(relativePath, roots: destinationRoots) {
+                return resolved
+            }
+            if let parent = fallbackDestinationParent {
+                return parent.appendingPathComponent(relativePath)
+            }
+            throw TransferSessionError.missingSourceFile(relativePath)
+        }
+
         func process(_ frame: WireFrame) async throws -> Bool {
             switch frame.type {
             case .jobManifest:
@@ -526,7 +539,7 @@ final class TransferSession: @unchecked Sendable {
                 closeHandle()
                 let meta = try TransferCodec.decodeJSON(frame, as: FileHeaderPayload.self).metadata
                 currentMeta = meta
-                let dest = destinationRoot.appendingPathComponent(meta.relativePath)
+                let dest = try destinationURL(for: meta.relativePath)
                 try FileManager.default.createDirectory(
                     at: dest.deletingLastPathComponent(),
                     withIntermediateDirectories: true
@@ -555,7 +568,7 @@ final class TransferSession: @unchecked Sendable {
             case .fileEnd:
                 closeHandle()
                 if let meta = currentMeta {
-                    let dest = destinationRoot.appendingPathComponent(meta.relativePath)
+                    let dest = try destinationURL(for: meta.relativePath)
                     _ = try applier.applyMetadata(meta, to: dest, policy: activePolicy)
                     let applied = PermissionPolicyEngine.apply(
                         meta,

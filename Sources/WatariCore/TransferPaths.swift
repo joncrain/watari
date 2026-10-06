@@ -50,23 +50,20 @@ public enum DestinationInventory {
         denylist: Denylist = Denylist(),
         hashContents: Bool = true
     ) throws -> [FileMetadata] {
-        var entries: [FileMetadata] = []
-        let fm = FileManager.default
+        var roots: [String: URL] = [:]
         for name in rootNames {
-            let url = destinationRoot.appendingPathComponent(name)
-            var isDir: ObjCBool = false
-            guard fm.fileExists(atPath: url.path, isDirectory: &isDir), isDir.boolValue else {
-                continue
-            }
-            let scanned = try FileScanner.scan(
-                root: url,
-                displayRoot: name,
-                denylist: denylist,
-                hashContents: hashContents
-            )
-            entries.append(contentsOf: scanned.entries)
+            roots[name] = destinationRoot.appendingPathComponent(name, isDirectory: true)
         }
-        return entries
+        return try scan(roots: roots, denylist: denylist, hashContents: hashContents)
+    }
+
+    /// Scan already-mapped destination roots (home mapping or override).
+    public static func scan(
+        roots: [String: URL],
+        denylist: Denylist = Denylist(),
+        hashContents: Bool = true
+    ) throws -> [FileMetadata] {
+        try SourceOffer.scan(roots: roots, denylist: denylist, hashContents: hashContents)
     }
 }
 
