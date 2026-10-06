@@ -103,7 +103,7 @@ struct ConnectSheet: View {
                             ProgressView()
                                 .controlSize(.small)
                         } else {
-                            Text("\(peer.host):\(peer.port)")
+                            Text(peer.detail)
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
                         }
@@ -128,11 +128,7 @@ struct ConnectSheet: View {
         errorText = nil
         Task {
             do {
-                try await model.connectAndBrowse(
-                    host: peer.host,
-                    port: peer.port,
-                    displayName: peer.name
-                )
+                try await model.connectAndBrowse(bonjour: peer)
                 await MainActor.run { dismiss() }
             } catch {
                 await MainActor.run {

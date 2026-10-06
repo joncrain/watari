@@ -124,7 +124,7 @@ struct ConnectFirstView: View {
                                 VStack(alignment: .leading, spacing: 2) {
                                     Text(peer.name)
                                         .font(.body.weight(.medium))
-                                    Text("\(peer.host):\(peer.port)")
+                                    Text(peer.detail)
                                         .font(.caption)
                                         .foregroundStyle(.secondary)
                                 }
@@ -188,11 +188,7 @@ struct ConnectFirstView: View {
         errorText = nil
         Task {
             do {
-                try await model.connectAndBrowse(
-                    host: peer.host,
-                    port: peer.port,
-                    displayName: peer.name
-                )
+                try await model.connectAndBrowse(bonjour: peer)
             } catch {
                 await MainActor.run {
                     errorText = error.localizedDescription

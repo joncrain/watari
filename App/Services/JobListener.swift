@@ -34,7 +34,10 @@ final class JobListener: @unchecked Sendable {
             throw PeerConnectorError.invalidPort
         }
 
-        let params = WatariTLS.listenerParameters()
+        guard WatariTLS.hasIdentity else {
+            throw TLSIdentityError.keyed("missing local identity — refuse broken TLS listener")
+        }
+        let params = try WatariTLS.listenerParameters()
         let listener = try NWListener(using: params, on: nwPort)
         if advertiseBonjour {
             let name = displayName()
@@ -62,7 +65,15 @@ final class JobListener: @unchecked Sendable {
                         progress: { _, _ in }
                     )
                 } catch {
-                    onError(error.localizedDescription)
+                    // Ignore aborted / probe noise (cleartext Bonjour resolve, cancelled peers).
+                    let text = error.localizedDescription
+                    if text.contains("-9816") || text.contains("-9810")
+                        || text.localizedCaseInsensitiveContains("cancel")
+                        || text.localizedCaseInsensitiveContains("closed") {
+                        listenLog.debug("Inbound session ended early: \(text, privacy: .public)")
+                    } else {
+                        onError(text)
+                    }
                 }
                 connection.cancel()
             }

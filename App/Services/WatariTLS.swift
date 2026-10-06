@@ -1,43 +1,52 @@
 import Foundation
 import Network
 import Security
-import CryptoKit
 import os.log
 
 private let tlsLog = Logger(subsystem: "app.watari.mac", category: "TLS")
 
 /// Shared TLS options for Watari peer connections.
 ///
-/// Root cause of NWError -9810 (`errSSLInternal`): listener/client used
-/// `NWProtocolTLS.Options()` with **no local identity** on the server and default
-/// certificate verification on the client, so the handshake failed before Hello.
+/// Transport identity lives in an **app-owned file keychain** under Application Support
+/// (`Watari/tls.keychain`) plus a PKCS#12 seed. Nothing is read from or written to the
+/// login keychain — that path previously prompted for the user’s Apple Development
+/// (“dev”) key when a loose `kSecClassIdentity` query resolved the wrong SecIdentity,
+/// and failed handshakes with NWError -9816.
 ///
-/// Trust model: transport TLS uses a per-install self-signed identity; application
-/// trust is still the Curve25519 key exchanged in Hello (pinned after pairing).
+/// Application trust remains the Curve25519 key exchanged in Hello (pinned after pairing).
 enum WatariTLS {
-    private static let keychainLabel = "app.watari.mac.tls-identity"
     private static let queue = DispatchQueue(label: "app.watari.mac.tls")
+    private static let legacyKeychainLabel = "app.watari.mac.tls-identity"
+    /// Filename bumped when switching RSA — LibreSSL EC PKCS#12 crashes SecPKCS12Import on current macOS.
+    private static let p12FileName = "tls-identity-rsa.p12"
+    private static let passphraseFileName = "tls-identity-rsa.pass"
+    private static let fileKeychainName = "tls-rsa.keychain"
 
-    /// Identity for this Mac’s listener (created once, stored in keychain).
     nonisolated(unsafe) private static let localIdentity: SecIdentity? = {
-        if let existing = loadIdentity() { return existing }
+        SecKeychainSetUserInteractionAllowed(false)
+        defer { SecKeychainSetUserInteractionAllowed(true) }
+
+        deleteLegacyLoginKeychainItems()
+        deleteLegacyECIdentityFiles()
+
         do {
-            return try createAndStoreIdentity()
+            return try loadOrCreateIdentity()
         } catch {
             tlsLog.error("Failed to create TLS identity: \(error.localizedDescription, privacy: .public)")
             return nil
         }
     }()
 
-    static func listenerParameters() -> NWParameters {
+    static var hasIdentity: Bool { localIdentity != nil }
+
+    static func listenerParameters() throws -> NWParameters {
         let tls = NWProtocolTLS.Options()
         let security = tls.securityProtocolOptions
-        if let identity = localIdentity, let secIdentity = sec_identity_create(identity) {
-            sec_protocol_options_set_local_identity(security, secIdentity)
-        } else {
-            tlsLog.error("Listener starting without TLS identity — handshake will fail (-9810)")
+        guard let identity = localIdentity, let secIdentity = sec_identity_create(identity) else {
+            tlsLog.error("No TLS identity — refusing to start listener (-9810/-9816)")
+            throw TLSIdentityError.keyed("missing local identity")
         }
-        // Peer authentication is application-level (Hello public key pin).
+        sec_protocol_options_set_local_identity(security, secIdentity)
         sec_protocol_options_set_peer_authentication_required(security, false)
         let tcp = NWProtocolTCP.Options()
         let params = NWParameters(tls: tls, tcp: tcp)
@@ -48,7 +57,6 @@ enum WatariTLS {
     static func clientParameters() -> NWParameters {
         let tls = NWProtocolTLS.Options()
         let security = tls.securityProtocolOptions
-        // Accept the peer’s self-signed transport cert; pin via Hello afterward.
         sec_protocol_options_set_verify_block(security, { _, _, completion in
             completion(true)
         }, queue)
@@ -57,80 +65,206 @@ enum WatariTLS {
         return NWParameters(tls: tls, tcp: tcp)
     }
 
-    // MARK: - Identity lifecycle
+    // MARK: - App-owned file keychain + PKCS#12
 
-    private static func loadIdentity() -> SecIdentity? {
+    private static func loadOrCreateIdentity() throws -> SecIdentity {
+        let dir = try supportDirectory()
+        let passURL = dir.appendingPathComponent(passphraseFileName)
+        let p12URL = dir.appendingPathComponent(p12FileName)
+        let keychainURL = dir.appendingPathComponent(fileKeychainName)
+
+        let passphrase: String
+        if let existing = try? String(contentsOf: passURL, encoding: .utf8),
+           !existing.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            passphrase = existing.trimmingCharacters(in: .whitespacesAndNewlines)
+        } else {
+            passphrase = UUID().uuidString
+            try passphrase.write(to: passURL, atomically: true, encoding: .utf8)
+            try? FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: passURL.path)
+        }
+
+        if !FileManager.default.fileExists(atPath: p12URL.path) {
+            try generatePKCS12(at: p12URL, passphrase: passphrase)
+            try? FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: p12URL.path)
+        }
+
+        let keychain = try openFileKeychain(at: keychainURL, passphrase: passphrase)
+        if let existing = copyIdentity(from: keychain) {
+            tlsLog.info("TLS identity ready (existing file keychain item)")
+            return existing
+        }
+        return try importPKCS12(from: p12URL, passphrase: passphrase, into: keychain)
+    }
+
+    private static func copyIdentity(from keychain: SecKeychain) -> SecIdentity? {
         let query: [String: Any] = [
             kSecClass as String: kSecClassIdentity,
-            kSecAttrLabel as String: keychainLabel,
+            kSecMatchSearchList as String: [keychain],
             kSecReturnRef as String: true,
             kSecMatchLimit as String: kSecMatchLimitOne,
         ]
         var item: CFTypeRef?
         let status = SecItemCopyMatching(query as CFDictionary, &item)
         guard status == errSecSuccess, let item else { return nil }
-        // swiftlint:disable:next force_cast
         return (item as! SecIdentity)
     }
 
-    private static func createAndStoreIdentity() throws -> SecIdentity {
-        let tag = "\(keychainLabel).key".data(using: .utf8)!
-        let keyParams: [String: Any] = [
-            kSecAttrKeyType as String: kSecAttrKeyTypeECSECPrimeRandom,
-            kSecAttrKeySizeInBits as String: 256,
-            kSecAttrIsPermanent as String: true,
-            kSecAttrLabel as String: keychainLabel,
-            kSecAttrApplicationTag as String: tag,
-        ]
-        var error: Unmanaged<CFError>?
-        guard let privateKey = SecKeyCreateRandomKey(keyParams as CFDictionary, &error) else {
-            throw TLSIdentityError.keyed(error?.takeRetainedValue().localizedDescription ?? "key create failed")
-        }
-        guard let publicKey = SecKeyCopyPublicKey(privateKey) else {
-            throw TLSIdentityError.keyed("missing public key")
-        }
-        let cert = try SelfSignedCertificate.make(for: publicKey, privateKey: privateKey, commonName: "Watari Peer")
+    private static func supportDirectory() throws -> URL {
+        let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
+            ?? FileManager.default.temporaryDirectory
+        let dir = base.appendingPathComponent("Watari", isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        return dir
+    }
 
-        let certAdd: [String: Any] = [
-            kSecClass as String: kSecClassCertificate,
-            kSecValueRef as String: cert,
-            kSecAttrLabel as String: keychainLabel,
+    private static func openFileKeychain(at url: URL, passphrase: String) throws -> SecKeychain {
+        var keychain: SecKeychain?
+        let path = url.path
+        let pwd = passphrase
+        let pwdLen = UInt32(pwd.utf8.count)
+
+        if FileManager.default.fileExists(atPath: path) {
+            var status = SecKeychainOpen(path, &keychain)
+            guard status == errSecSuccess, let keychain else {
+                throw TLSIdentityError.keyed("keychain open \(status)")
+            }
+            status = SecKeychainUnlock(keychain, pwdLen, pwd, true)
+            if status != errSecSuccess && status != errSecAuthFailed {
+                // Retry after recreate if unlock fails hard.
+                tlsLog.error("Keychain unlock \(status) — recreating")
+                try? FileManager.default.removeItem(at: url)
+                return try createFileKeychain(at: url, passphrase: passphrase)
+            }
+            if status == errSecAuthFailed {
+                try? FileManager.default.removeItem(at: url)
+                return try createFileKeychain(at: url, passphrase: passphrase)
+            }
+            return keychain
+        }
+        return try createFileKeychain(at: url, passphrase: passphrase)
+    }
+
+    private static func createFileKeychain(at url: URL, passphrase: String) throws -> SecKeychain {
+        var keychain: SecKeychain?
+        let pwd = passphrase
+        let status = SecKeychainCreate(
+            url.path,
+            UInt32(pwd.utf8.count),
+            pwd,
+            false,
+            nil,
+            &keychain
+        )
+        guard status == errSecSuccess || status == errSecDuplicateKeychain, let keychain else {
+            throw TLSIdentityError.keyed("keychain create \(status)")
+        }
+        if status == errSecDuplicateKeychain {
+            return try openFileKeychain(at: url, passphrase: passphrase)
+        }
+        // Avoid any ACL prompts on keys stored here.
+        SecKeychainSetUserInteractionAllowed(false)
+        return keychain
+    }
+
+    private static func importPKCS12(from url: URL, passphrase: String, into keychain: SecKeychain) throws -> SecIdentity {
+        let data = try Data(contentsOf: url)
+        var items: CFArray?
+        // Import into the Watari file keychain only — never login keychain, never memory-only
+        // (memory-only PKCS12 import crashes on some macOS builds with NULL SecKeyRef).
+        let options: [String: Any] = [
+            kSecImportExportPassphrase as String: passphrase,
+            kSecImportExportKeychain as String: keychain,
         ]
-        SecItemDelete(certAdd as CFDictionary)
-        var status = SecItemAdd(certAdd as CFDictionary, nil)
-        guard status == errSecSuccess || status == errSecDuplicateItem else {
-            throw TLSIdentityError.keyed("cert store \(status)")
+        let status = SecPKCS12Import(data as CFData, options as CFDictionary, &items)
+        guard status == errSecSuccess, let items = items as? [[String: Any]], let first = items.first else {
+            throw TLSIdentityError.keyed("PKCS12 import \(status)")
+        }
+        guard let identity = first[kSecImportItemIdentity as String] else {
+            throw TLSIdentityError.keyed("PKCS12 missing identity")
+        }
+        tlsLog.info("TLS identity ready (Application Support file keychain)")
+        return identity as! SecIdentity
+    }
+
+    private static func generatePKCS12(at p12URL: URL, passphrase: String) throws {
+        let dir = p12URL.deletingLastPathComponent()
+        let keyURL = dir.appendingPathComponent("tls-tmp-key.pem")
+        let certURL = dir.appendingPathComponent("tls-tmp-cert.pem")
+        defer {
+            try? FileManager.default.removeItem(at: keyURL)
+            try? FileManager.default.removeItem(at: certURL)
         }
 
-        let identityQuery: [String: Any] = [
-            kSecClass as String: kSecClassIdentity,
-            kSecAttrLabel as String: keychainLabel,
-            kSecReturnRef as String: true,
-            kSecMatchLimit as String: kSecMatchLimitOne,
-        ]
-        // Prefer finding identity by certificate
-        let byCert: [String: Any] = [
-            kSecClass as String: kSecClassIdentity,
-            kSecReturnRef as String: true,
-            kSecMatchLimit as String: kSecMatchLimitOne,
-            kSecValueRef as String: cert,
-        ]
-        var identityRef: CFTypeRef?
-        status = SecItemCopyMatching(byCert as CFDictionary, &identityRef)
-        if status != errSecSuccess {
-            status = SecItemCopyMatching(identityQuery as CFDictionary, &identityRef)
+        // RSA — LibreSSL EC PKCS#12 triggers SecPKCS12Import crash
+        // (`SecKeyCopyExternalRepresentation called with NULL SecKeyRef`) on current macOS.
+        try runOpenSSL([
+            "req", "-x509", "-newkey", "rsa:2048",
+            "-keyout", keyURL.path,
+            "-out", certURL.path,
+            "-days", "3650",
+            "-nodes",
+            "-subj", "/CN=Watari Peer",
+        ])
+        try runOpenSSL([
+            "pkcs12", "-export",
+            "-inkey", keyURL.path,
+            "-in", certURL.path,
+            "-out", p12URL.path,
+            "-passout", "pass:\(passphrase)",
+            "-name", "Watari Peer",
+        ])
+        guard FileManager.default.fileExists(atPath: p12URL.path) else {
+            throw TLSIdentityError.keyed("openssl did not write PKCS12")
         }
-        if status == errSecSuccess, let identityRef {
-            return (identityRef as! SecIdentity)
-        }
+        tlsLog.info("Created Application Support TLS PKCS12")
+    }
 
-        // macOS: build identity from cert + keychain private key.
-        var created: SecIdentity?
-        let createStatus = SecIdentityCreateWithCertificate(nil, cert, &created)
-        guard createStatus == errSecSuccess, let created else {
-            throw TLSIdentityError.keyed("identity create \(createStatus) / lookup \(status)")
+    private static func runOpenSSL(_ arguments: [String]) throws {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/openssl")
+        process.arguments = arguments
+        let err = Pipe()
+        process.standardError = err
+        process.standardOutput = Pipe()
+        do {
+            try process.run()
+            process.waitUntilExit()
+        } catch {
+            throw TLSIdentityError.keyed("openssl launch: \(error.localizedDescription)")
         }
-        return created
+        guard process.terminationStatus == 0 else {
+            let msg = String(data: err.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+            throw TLSIdentityError.keyed("openssl \(arguments.first ?? "") failed: \(msg)")
+        }
+    }
+
+    /// Drop EC PKCS#12 / keychain from the first TLS fix (import crashed with NULL SecKeyRef).
+    private static func deleteLegacyECIdentityFiles() {
+        guard let dir = try? supportDirectory() else { return }
+        for name in [
+            "tls-identity.p12", "tls-identity.pass", "tls.keychain", "tls.keychain-db",
+            "tls-tmp-key.pem", "tls-tmp-cert.pem",
+        ] {
+            try? FileManager.default.removeItem(at: dir.appendingPathComponent(name))
+        }
+    }
+
+    /// Remove leftover permanent login-keychain items from earlier builds.
+    private static func deleteLegacyLoginKeychainItems() {
+        let queries: [[String: Any]] = [
+            [kSecClass as String: kSecClassCertificate, kSecAttrLabel as String: legacyKeychainLabel],
+            [kSecClass as String: kSecClassKey, kSecAttrLabel as String: legacyKeychainLabel],
+            [
+                kSecClass as String: kSecClassKey,
+                kSecAttrApplicationTag as String: "\(legacyKeychainLabel).key".data(using: .utf8)!,
+            ],
+            [kSecClass as String: kSecClassIdentity, kSecAttrLabel as String: legacyKeychainLabel],
+        ]
+        for query in queries {
+            if SecItemDelete(query as CFDictionary) == errSecSuccess {
+                tlsLog.info("Removed legacy login-keychain TLS item")
+            }
+        }
     }
 }
 
@@ -140,142 +274,5 @@ enum TLSIdentityError: LocalizedError {
         switch self {
         case .keyed(let s): return "TLS identity: \(s)"
         }
-    }
-}
-
-// MARK: - Minimal self-signed X.509 (ECDSA P-256)
-
-/// Builds a tiny self-signed certificate so Network.framework TLS has a local identity.
-enum SelfSignedCertificate {
-    static func make(for publicKey: SecKey, privateKey: SecKey, commonName: String) throws -> SecCertificate {
-        guard let publicKeyData = SecKeyCopyExternalRepresentation(publicKey, nil) as Data? else {
-            throw TLSIdentityError.keyed("export public key")
-        }
-        // ANSI X9.63 uncompressed: 0x04 || X || Y (65 bytes for P-256)
-        guard publicKeyData.count == 65, publicKeyData[0] == 0x04 else {
-            throw TLSIdentityError.keyed("unexpected EC public key format")
-        }
-
-        let serial = Data([0x01])
-        let cnData = Data(commonName.utf8)
-        let notBefore = Date()
-        let notAfter = Calendar.current.date(byAdding: .year, value: 10, to: notBefore) ?? notBefore.addingTimeInterval(86400 * 3650)
-
-        let tbs = try tbsCertificate(
-            serial: serial,
-            cn: cnData,
-            notBefore: notBefore,
-            notAfter: notAfter,
-            publicKeyX963: publicKeyData
-        )
-
-        let digest = SHA256.hash(data: tbs)
-        let digestData = Data(digest)
-        var signError: Unmanaged<CFError>?
-        guard let signature = SecKeyCreateSignature(
-            privateKey,
-            .ecdsaSignatureMessageX962SHA256,
-            tbs as CFData,
-            &signError
-        ) as Data? else {
-            throw TLSIdentityError.keyed(signError?.takeRetainedValue().localizedDescription ?? "sign failed")
-        }
-        _ = digestData
-
-        // Certificate ::= SEQUENCE { tbsCertificate, signatureAlgorithm, signatureValue }
-        let cert = asn1Sequence(
-            tbs
-            + asn1Sequence(oidECDSAWithSHA256)
-            + asn1BitString(signature)
-        )
-        guard let certificate = SecCertificateCreateWithData(nil, cert as CFData) else {
-            throw TLSIdentityError.keyed("SecCertificateCreateWithData failed")
-        }
-        return certificate
-    }
-
-    // MARK: ASN.1 helpers
-
-    private static let oidECDSAWithSHA256 = Data([0x06, 0x08, 0x2a, 0x86, 0x48, 0xce, 0x3d, 0x04, 0x03, 0x02])
-    private static let oidECPublicKey = Data([0x06, 0x07, 0x2a, 0x86, 0x48, 0xce, 0x3d, 0x02, 0x01])
-    private static let oidPrime256v1 = Data([0x06, 0x08, 0x2a, 0x86, 0x48, 0xce, 0x3d, 0x03, 0x01, 0x07])
-    private static let oidCommonName = Data([0x06, 0x03, 0x55, 0x04, 0x03])
-
-    private static func tbsCertificate(
-        serial: Data,
-        cn: Data,
-        notBefore: Date,
-        notAfter: Date,
-        publicKeyX963: Data
-    ) throws -> Data {
-        // Version v3 (explicit [0] EXPLICIT INTEGER 2)
-        let version = Data([0xa0, 0x03, 0x02, 0x01, 0x02])
-        let serialNumber = asn1Integer(serial)
-        let signature = asn1Sequence(oidECDSAWithSHA256)
-        let issuer = asn1Name(cn: cn)
-        let validity = asn1Sequence(asn1UTCTime(notBefore) + asn1UTCTime(notAfter))
-        let subject = issuer
-        let algorithm = asn1Sequence(oidECPublicKey + oidPrime256v1)
-        let subjectPublicKeyInfo = asn1Sequence(algorithm + asn1BitString(publicKeyX963))
-        return asn1Sequence(
-            version + serialNumber + signature + issuer + validity + subject + subjectPublicKeyInfo
-        )
-    }
-
-    private static func asn1Name(cn: Data) -> Data {
-        // Name ::= RDNSequence ::= SEQUENCE OF RelativeDistinguishedName
-        // RDN ::= SET OF AttributeTypeAndValue
-        let attr = asn1Sequence(oidCommonName + asn1UTF8String(cn))
-        let rdn = asn1Set(attr)
-        return asn1Sequence(rdn)
-    }
-
-    private static func asn1UTCTime(_ date: Date) -> Data {
-        let formatter = DateFormatter()
-        formatter.locale = Locale(identifier: "en_US_POSIX")
-        formatter.timeZone = TimeZone(secondsFromGMT: 0)
-        formatter.dateFormat = "yyMMddHHmmss'Z'"
-        let s = formatter.string(from: date)
-        var d = Data([0x17, UInt8(s.utf8.count)])
-        d.append(contentsOf: s.utf8)
-        return d
-    }
-
-    private static func asn1UTF8String(_ data: Data) -> Data {
-        asn1Header(0x0c, length: data.count) + data
-    }
-
-    private static func asn1Integer(_ data: Data) -> Data {
-        var value = data
-        if let first = value.first, first >= 0x80 {
-            value.insert(0x00, at: 0)
-        }
-        return asn1Header(0x02, length: value.count) + value
-    }
-
-    private static func asn1BitString(_ data: Data) -> Data {
-        var content = Data([0x00]) // unused bits
-        content.append(data)
-        return asn1Header(0x03, length: content.count) + content
-    }
-
-    private static func asn1Sequence(_ data: Data) -> Data {
-        asn1Header(0x30, length: data.count) + data
-    }
-
-    private static func asn1Set(_ data: Data) -> Data {
-        asn1Header(0x31, length: data.count) + data
-    }
-
-    private static func asn1Header(_ tag: UInt8, length: Int) -> Data {
-        var d = Data([tag])
-        if length < 0x80 {
-            d.append(UInt8(length))
-        } else if length <= 0xff {
-            d.append(contentsOf: [0x81, UInt8(length)])
-        } else {
-            d.append(contentsOf: [0x82, UInt8((length >> 8) & 0xff), UInt8(length & 0xff)])
-        }
-        return d
     }
 }

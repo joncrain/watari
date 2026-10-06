@@ -1,21 +1,32 @@
 import Foundation
 import Network
+import SystemConfiguration
 import os.log
 
 private let bonjourLog = Logger(subsystem: "app.watari.mac", category: "Bonjour")
 
 struct BonjourPeer: Identifiable, Equatable, Hashable {
-    var id: String { "\(name)|\(host)|\(port)" }
+    /// One row per advertised service name (IPv4/IPv6/multi-iface collapsed).
+    var id: String { name.lowercased() }
     var name: String
-    var host: String
-    var port: Int
+    var serviceType: String
+    var domain: String
+    /// Best-effort display hint; address resolved only when connecting.
+    var detail: String
+
+    var endpoint: NWEndpoint {
+        .service(name: name, type: serviceType, domain: domain.isEmpty ? "local." : domain, interface: nil)
+    }
 }
 
 /// Optional Nearby discovery via Bonjour / DNS-SD. Off under managed defaults.
+///
+/// Does **not** open cleartext TCP to the peer for resolve — that races the TLS
+/// listener and surfaces NWError -9816 (`errSSLBadCipherSuite`) on launch when
+/// this Mac’s own service appears in the browse set.
 final class BonjourBrowser: @unchecked Sendable {
     private var browser: NWBrowser?
-    private var resolvers: [ObjectIdentifier: NWConnection] = [:]
-    private var peersByID: [String: BonjourPeer] = [:]
+    private var peersByName: [String: BonjourPeer] = [:]
     private var onUpdate: (([BonjourPeer]) -> Void)?
     private let lock = NSLock()
 
@@ -43,104 +54,65 @@ final class BonjourBrowser: @unchecked Sendable {
         browser?.cancel()
         browser = nil
         lock.lock()
-        let active = resolvers
-        resolvers.removeAll()
-        peersByID.removeAll()
+        peersByName.removeAll()
         lock.unlock()
-        for (_, connection) in active {
-            connection.cancel()
-        }
     }
 
     private func handle(results: Set<NWBrowser.Result>) {
-        let services = results.filter {
-            if case .service = $0.endpoint { return true }
-            return false
-        }
-        lock.lock()
-        // Drop resolvers for vanished services.
-        let currentNames: Set<String> = Set(services.compactMap {
-            if case let .service(name: name, type: _, domain: _, interface: _) = $0.endpoint {
-                return name
+        let localNames = Self.localServiceNames()
+        var next: [String: BonjourPeer] = [:]
+
+        for result in results {
+            guard case let .service(name: name, type: type, domain: domain, interface: _) = result.endpoint else {
+                continue
             }
-            return nil
-        })
-        peersByID = peersByID.filter { currentNames.contains($0.value.name) }
+            if localNames.contains(name.lowercased()) {
+                continue
+            }
+            let key = name.lowercased()
+            // Dedupe multi-interface / IPv4+IPv6 browse hits by service name.
+            if next[key] != nil { continue }
+            next[key] = BonjourPeer(
+                name: name,
+                serviceType: type,
+                domain: domain,
+                detail: "Bonjour · \(domain.isEmpty ? "local" : domain)"
+            )
+        }
+
+        lock.lock()
+        peersByName = next
         publishLocked()
         lock.unlock()
-
-        for result in services {
-            resolve(result)
-        }
-        if services.isEmpty {
-            lock.lock()
-            peersByID.removeAll()
-            publishLocked()
-            lock.unlock()
-        }
-    }
-
-    private func resolve(_ result: NWBrowser.Result) {
-        guard case let .service(name: name, type: _, domain: _, interface: _) = result.endpoint else { return }
-
-        let connection = NWConnection(to: result.endpoint, using: .tcp)
-        lock.lock()
-        resolvers[ObjectIdentifier(connection)] = connection
-        lock.unlock()
-
-        connection.stateUpdateHandler = { [weak self, weak connection] state in
-            guard let self, let connection else { return }
-            switch state {
-            case .ready:
-                if let endpoint = connection.currentPath?.remoteEndpoint {
-                    let resolved = Self.hostPort(from: endpoint)
-                    if let resolved {
-                        let peer = BonjourPeer(name: name, host: resolved.host, port: resolved.port)
-                        self.lock.lock()
-                        self.peersByID[peer.id] = peer
-                        self.publishLocked()
-                        self.lock.unlock()
-                    }
-                }
-                connection.cancel()
-            case .failed, .cancelled:
-                self.lock.lock()
-                self.resolvers[ObjectIdentifier(connection)] = nil
-                self.lock.unlock()
-            default:
-                break
-            }
-        }
-        connection.start(queue: .global(qos: .utility))
     }
 
     private func publishLocked() {
-        let list = peersByID.values.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+        let list = peersByName.values.sorted {
+            $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending
+        }
         let callback = onUpdate
         DispatchQueue.main.async {
             callback?(list)
         }
     }
 
-    private static func hostPort(from endpoint: NWEndpoint) -> (host: String, port: Int)? {
-        switch endpoint {
-        case .hostPort(let host, let port):
-            return (hostString(host), Int(port.rawValue))
-        default:
-            return nil
+    /// Names this Mac advertises (Computer / Local Host / localized).
+    static func localServiceNames() -> Set<String> {
+        var names = Set<String>()
+        if let localized = Host.current().localizedName {
+            names.insert(localized.lowercased())
         }
-    }
-
-    private static func hostString(_ host: NWEndpoint.Host) -> String {
-        switch host {
-        case .name(let name, _):
-            return name
-        case .ipv4(let address):
-            return "\(address)"
-        case .ipv6(let address):
-            return "\(address)"
-        @unknown default:
-            return "\(host)"
+        let processHost = ProcessInfo.processInfo.hostName
+        names.insert(processHost.lowercased())
+        if let short = processHost.split(separator: ".").first {
+            names.insert(String(short).lowercased())
         }
+        if let computer = SCDynamicStoreCopyComputerName(nil, nil) as String? {
+            names.insert(computer.lowercased())
+        }
+        if let local = SCDynamicStoreCopyLocalHostName(nil) as String? {
+            names.insert(local.lowercased())
+        }
+        return names
     }
 }

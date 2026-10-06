@@ -2,11 +2,16 @@
 
 Watari connects two Macs over TLS on a chosen TCP port (default **59234**). Trust is the Curve25519 key exchanged in Hello and pinned after pairing — not the LAN and not Bonjour.
 
-## Root cause of NWError -9810
+## Root cause of NWError -9810 / -9816
 
-`NWError -9810` (`errSSLInternal`) appeared when the listener used `NWProtocolTLS.Options()` **without a local identity** and the client expected a normal TLS handshake. Network.framework then aborted before the Watari Hello frame.
+`NWError -9810` (`errSSLInternal`) appeared when the listener used `NWProtocolTLS.Options()` **without a local identity** and the client expected a normal TLS handshake.
 
-**Fix:** each install creates a self-signed transport identity (`WatariTLS`) for the listener; the client accepts that cert via a verify block. Application trust remains the Hello public-key pin after pairing.
+`NWError -9816` (server closed / bad cipher) appeared when:
+
+1. Cleartext Bonjour “resolve” TCP hit the TLS listener on launch, or
+2. TLS identity was taken from the **login keychain** (a loose `kSecClassIdentity` query could resolve an Apple Development signing identity — prompting for the user’s “dev key” and failing the handshake).
+
+**Fix:** each install stores a self-signed **RSA** PKCS#12 under Application Support and loads it into an **app-owned file keychain** (never the login keychain). Clients accept the transport cert via a verify block. Application trust remains the Hello public-key pin after pairing.
 
 ## Connect UX
 
@@ -37,7 +42,8 @@ Watari does **not** use the Screen Sharing / Remote Management privilege. Typica
 | Symptom | Likely cause |
 |---------|----------------|
 | Secure connection failed (TLS) / -9810 | Old build without TLS identity; update both Macs |
-| Connection refused | Listen off, wrong port, or firewall |
+| Secure connection failed (TLS) / -9816 | Often cleartext traffic hitting the TLS port, or a broken listener identity; update both Macs |
+| Connection refused | Listen off / wrong port / Happy Eyeballs race (fixed: wait for `.ready`). Not usually the macOS firewall |
 | Couldn’t reach Watari… | Peer not listening / wrong host |
 | Local Network access is off | Enable Watari under Local Network privacy |
 | No Nearby Macs | Different VLAN, mDNS blocked, or Managed Nearby off — use host/port |

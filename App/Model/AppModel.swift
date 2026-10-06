@@ -548,6 +548,16 @@ final class AppModel: ObservableObject {
             displayName: name,
             pairingCode: pairingCode
         )
+        adoptConnectedPeer(record)
+    }
+
+    /// Nearby: pair via Bonjour service endpoint (no pre-resolve to IP).
+    func connectAndBrowse(bonjour peer: BonjourPeer, pairingCode: String = "") async throws {
+        let record = try await peerConnector.pair(bonjour: peer, pairingCode: pairingCode)
+        adoptConnectedPeer(record)
+    }
+
+    private func adoptConnectedPeer(_ record: PeerRecord) {
         peers.append(record)
         selectedPeerID = record.id
         showConnectSheet = false

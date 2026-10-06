@@ -15,6 +15,7 @@ enum PeerConnectorError: LocalizedError {
     case localNetworkDenied
     case connectionRefused
     case tlsHandshakeFailed
+    case timedOut
 
     var errorDescription: String? {
         switch self {
@@ -31,14 +32,16 @@ enum PeerConnectorError: LocalizedError {
         case .localNetworkDenied:
             return "Local Network access is off for Watari. System Settings → Privacy & Security → Local Network → enable Watari, then try again."
         case .connectionRefused:
-            return "Connection refused. Check the host/port, allow Watari through the firewall if prompted, and confirm Listen is on."
+            return "Connection refused. Confirm Listen is on for that Mac and the port matches. (This is usually “nothing listening”, not the macOS firewall.)"
         case .tlsHandshakeFailed:
             return "Secure connection failed (TLS). Update both Macs to the latest Watari, confirm Listen is on, then try again."
+        case .timedOut:
+            return "Timed out reaching that Mac. Confirm Listen is on, both Macs share a network path, and Local Network is allowed for Watari."
         }
     }
 }
 
-/// Explicit host/port connect + pairing with pinned keys over TLS.
+/// Explicit host/port or Bonjour-service connect + pairing with pinned keys over TLS.
 final class PeerConnector: @unchecked Sendable {
     private var connection: NWConnection?
     private let localKey = Curve25519.Signing.PrivateKey()
@@ -47,18 +50,31 @@ final class PeerConnector: @unchecked Sendable {
 
     func pair(host: String, port: Int, displayName: String, pairingCode: String) async throws -> PeerRecord {
         guard port > 0, port < 65536 else { throw PeerConnectorError.invalidPort }
-
-        let peerKey = try await connectAndExchange(
-            host: host,
-            port: port,
+        let endpoint = NWEndpoint.hostPort(host: NWEndpoint.Host(host), port: NWEndpoint.Port(rawValue: UInt16(port))!)
+        let (peerKey, resolved) = try await connectAndExchange(
+            to: endpoint,
             pairingCode: pairingCode,
             requirePinned: nil
         )
-
         return PeerRecord(
             displayName: displayName,
-            host: host,
-            port: port,
+            host: resolved.host ?? host,
+            port: resolved.port ?? port,
+            publicKey: peerKey
+        )
+    }
+
+    /// Nearby: connect via Bonjour service endpoint so Network.framework picks the best path.
+    func pair(bonjour peer: BonjourPeer, pairingCode: String = "") async throws -> PeerRecord {
+        let (peerKey, resolved) = try await connectAndExchange(
+            to: peer.endpoint,
+            pairingCode: pairingCode,
+            requirePinned: nil
+        )
+        return PeerRecord(
+            displayName: peer.name,
+            host: resolved.host,
+            port: resolved.port ?? 59234,
             publicKey: peerKey
         )
     }
@@ -67,9 +83,9 @@ final class PeerConnector: @unchecked Sendable {
         guard let host = peer.host, let port = peer.port else {
             throw PeerConnectorError.handshakeFailed("Peer has no host/port.")
         }
+        let endpoint = NWEndpoint.hostPort(host: NWEndpoint.Host(host), port: NWEndpoint.Port(rawValue: UInt16(port))!)
         _ = try await connectAndExchange(
-            host: host,
-            port: port,
+            to: endpoint,
             pairingCode: "",
             requirePinned: peer.publicKey.isEmpty ? nil : peer.publicKey
         )
@@ -80,18 +96,12 @@ final class PeerConnector: @unchecked Sendable {
     }
 
     private func connectAndExchange(
-        host: String,
-        port: Int,
+        to endpoint: NWEndpoint,
         pairingCode: String,
         requirePinned: Data?
-    ) async throws -> Data {
-        let nwHost = NWEndpoint.Host(host)
-        guard let nwPort = NWEndpoint.Port(rawValue: UInt16(port)) else {
-            throw PeerConnectorError.invalidPort
-        }
-
+    ) async throws -> (Data, (host: String?, port: Int?)) {
         let params = WatariTLS.clientParameters()
-        let connection = NWConnection(host: nwHost, port: nwPort, using: params)
+        let connection = NWConnection(to: endpoint, using: params)
         self.connection = connection
 
         do {
@@ -100,6 +110,8 @@ final class PeerConnector: @unchecked Sendable {
             connection.cancel()
             throw mapNetworkError(error)
         }
+
+        let resolved = Self.hostPort(from: connection.currentPath?.remoteEndpoint)
 
         let hello = HelloPayload(
             appVersion: Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "0.1.0",
@@ -125,26 +137,42 @@ final class PeerConnector: @unchecked Sendable {
             throw PeerConnectorError.untrustedPeer
         }
 
-        return peerHello.publicKey
+        return (peerHello.publicKey, resolved)
     }
 
-    private func waitUntilReady(_ connection: NWConnection) async throws {
+    /// Wait for `.ready` only. Do **not** fail on `.waiting(ECONNREFUSED)` —
+    /// Happy Eyeballs often reports refused on one candidate while another path
+    /// (seen in logs as parallel C11 TLS success + C12 refused) is still connecting.
+    private func waitUntilReady(_ connection: NWConnection, timeoutSeconds: TimeInterval = 20) async throws {
         try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Void, Error>) in
             final class Gate: @unchecked Sendable {
                 private let lock = NSLock()
                 private var resumed = false
+                private var timeoutItem: DispatchWorkItem?
+
                 func resume(_ result: Result<Void, Error>, cont: CheckedContinuation<Void, Error>) {
                     lock.lock()
                     defer { lock.unlock() }
                     guard !resumed else { return }
                     resumed = true
+                    timeoutItem?.cancel()
                     switch result {
                     case .success: cont.resume()
                     case .failure(let error): cont.resume(throwing: error)
                     }
                 }
+
+                func armTimeout(seconds: TimeInterval, cont: CheckedContinuation<Void, Error>, connection: NWConnection) {
+                    let item = DispatchWorkItem { [weak self] in
+                        connection.cancel()
+                        self?.resume(.failure(PeerConnectorError.timedOut), cont: cont)
+                    }
+                    timeoutItem = item
+                    DispatchQueue.global().asyncAfter(deadline: .now() + seconds, execute: item)
+                }
             }
             let gate = Gate()
+            gate.armTimeout(seconds: timeoutSeconds, cont: cont, connection: connection)
             connection.stateUpdateHandler = { state in
                 switch state {
                 case .ready:
@@ -154,11 +182,8 @@ final class PeerConnector: @unchecked Sendable {
                 case .cancelled:
                     gate.resume(.failure(PeerConnectorError.cancelled), cont: cont)
                 case .waiting(let error):
-                    // Surf waiting errors that won't recover (e.g. refused).
-                    let ns = error as NWError
-                    if case .posix(let code) = ns, code == .ECONNREFUSED {
-                        gate.resume(.failure(error), cont: cont)
-                    }
+                    // Log only — Happy Eyeballs may recover on another path.
+                    peerLog.info("Connect waiting: \(error.localizedDescription, privacy: .public)")
                 default:
                     break
                 }
@@ -169,24 +194,27 @@ final class PeerConnector: @unchecked Sendable {
 
     private func mapNetworkError(_ error: Error) -> PeerConnectorError {
         peerLog.error("Network connect failed: \(error.localizedDescription, privacy: .public)")
+        if let known = error as? PeerConnectorError { return known }
         let text = error.localizedDescription
         if let nw = error as? NWError {
             switch nw {
             case .tls(let status):
-                // errSSLInternal = -9810
-                if status == -9810 || text.contains("-9810") {
+                // -9810 errSSLInternal, -9816 errSSLBadCipherSuite (often cleartext→TLS or bad identity)
+                if status == -9810 || status == -9816 || text.contains("-9810") || text.contains("-9816") {
                     return .tlsHandshakeFailed
                 }
                 return .tlsHandshakeFailed
             case .posix(let code):
                 if code == .ECONNREFUSED { return .connectionRefused }
                 if code == .EHOSTUNREACH || code == .ENETUNREACH { return .notListening }
+                if code == .ETIMEDOUT { return .timedOut }
                 break
             default:
                 break
             }
         }
-        if text.contains("-9810") || text.lowercased().contains("ssl") || text.lowercased().contains("tls") {
+        if text.contains("-9810") || text.contains("-9816")
+            || text.lowercased().contains("ssl") || text.lowercased().contains("tls") {
             return .tlsHandshakeFailed
         }
         if text.lowercased().contains("refused") {
@@ -198,6 +226,29 @@ final class PeerConnector: @unchecked Sendable {
         return .handshakeFailed(
             "Couldn’t connect (\(text)). On the source Mac enable Listen, allow Local Network for Watari, and check firewall/port."
         )
+    }
+
+    private static func hostPort(from endpoint: NWEndpoint?) -> (host: String?, port: Int?) {
+        guard let endpoint else { return (nil, nil) }
+        switch endpoint {
+        case .hostPort(let host, let port):
+            return (hostString(host), Int(port.rawValue))
+        default:
+            return (nil, nil)
+        }
+    }
+
+    private static func hostString(_ host: NWEndpoint.Host) -> String {
+        switch host {
+        case .name(let name, _):
+            return name
+        case .ipv4(let address):
+            return "\(address)"
+        case .ipv6(let address):
+            return "\(address)"
+        @unknown default:
+            return "\(host)"
+        }
     }
 
     private func send(_ data: Data, on connection: NWConnection) async throws {
