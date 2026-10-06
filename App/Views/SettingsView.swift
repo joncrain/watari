@@ -115,7 +115,7 @@ private struct NetworkAdvancedForm: View {
             TextField(
                 "Bandwidth limit (bytes/s, 0 = none)",
                 value: $model.network.bandwidthLimitBytesPerSecond,
-                format: IntegerFormatStyle<Int>().grouping(.never)
+                format: IntegerFormatStyle<UInt64>().grouping(.never)
             )
             TextField(
                 "Idle timeout (seconds)",
