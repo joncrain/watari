@@ -14,7 +14,7 @@ struct DetailView: View {
     }
 
     private var header: some View {
-        HStack {
+        HStack(alignment: .top) {
             VStack(alignment: .leading, spacing: 4) {
                 Text(model.statusMessage)
                     .font(.headline)
@@ -25,8 +25,14 @@ struct DetailView: View {
                 }
             }
             Spacer()
-            Button("Add Folder…") { model.addFolder() }
-                .keyboardShortcut("o", modifiers: [.command])
+            Menu("Add") {
+                ForEach(ConvenienceTarget.allCases) { target in
+                    Button(target.title) { model.addConvenience(target) }
+                }
+                Divider()
+                Button("Add Folder…") { model.addFolder() }
+            }
+            .keyboardShortcut("o", modifiers: [.command])
         }
         .padding()
     }
@@ -76,18 +82,37 @@ struct DetailView: View {
 
     private var folderList: some View {
         List {
-            Section("Folders in this job") {
-                ForEach(model.folderBookmarks) { folder in
-                    HStack {
-                        Label(folder.displayName, systemImage: "folder")
-                        Spacer()
-                        Text(folder.path)
-                            .foregroundStyle(.secondary)
-                            .lineLimit(1)
-                            .truncationMode(.middle)
+            Section("Sources") {
+                ForEach(ConvenienceTarget.allCases) { target in
+                    Button {
+                        model.addConvenience(target)
+                    } label: {
+                        Label(target.title, systemImage: "folder")
                     }
-                    .contextMenu {
-                        Button("Remove", role: .destructive) { model.removeFolder(folder.id) }
+                }
+                Button {
+                    model.addFolder()
+                } label: {
+                    Label("Add Folder…", systemImage: "folder.badge.plus")
+                }
+            }
+            Section("Folders in this job") {
+                if model.folderBookmarks.isEmpty {
+                    Text("None yet")
+                        .foregroundStyle(.secondary)
+                } else {
+                    ForEach(model.folderBookmarks) { folder in
+                        HStack {
+                            Label(folder.displayName, systemImage: "folder")
+                            Spacer()
+                            Text(folder.path)
+                                .foregroundStyle(.secondary)
+                                .lineLimit(1)
+                                .truncationMode(.middle)
+                        }
+                        .contextMenu {
+                            Button("Remove", role: .destructive) { model.removeFolder(folder.id) }
+                        }
                     }
                 }
             }
@@ -100,9 +125,14 @@ struct DetailView: View {
                 Section("Preview") {
                     LabeledContent("Copy", value: "\(preview.copy)")
                     LabeledContent("Update", value: "\(preview.update)")
+                    LabeledContent("Keep both", value: "\(preview.keepBoth)")
                     LabeledContent("Unchanged", value: "\(preview.unchanged)")
                     LabeledContent("Skip", value: "\(preview.skip)")
                     LabeledContent("Permission notes", value: "\(preview.permissionExceptionCount)")
+                    LabeledContent(
+                        "Indexed",
+                        value: ByteCountFormatter.string(fromByteCount: Int64(model.indexedBytes), countStyle: .file)
+                    )
                 }
                 Section("Items") {
                     ForEach(preview.items, id: \.relativePath) { item in
@@ -112,6 +142,10 @@ struct DetailView: View {
                                 Text(item.relativePath)
                                 if let reason = item.skipReason {
                                     Text(reason.rawValue)
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                } else if let owner = item.source?.ownerName {
+                                    Text("owner \(owner)")
                                         .font(.caption)
                                         .foregroundStyle(.secondary)
                                 }
@@ -133,6 +167,7 @@ struct DetailView: View {
         switch action {
         case .copy: return "plus.circle"
         case .update: return "arrow.triangle.2.circlepath"
+        case .keepBoth: return "doc.on.doc"
         case .unchanged: return "checkmark.circle"
         case .skip: return "minus.circle"
         }

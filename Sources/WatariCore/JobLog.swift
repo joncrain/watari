@@ -3,6 +3,7 @@ import Foundation
 public enum JobLogAction: String, Codable, Sendable {
     case copy
     case update
+    case keepBoth
     case skip
     case unchanged
     case exception

@@ -19,6 +19,7 @@ final class AppModel: ObservableObject {
     @Published var selectedPeerID: PeerRecord.ID?
     @Published var preview: PreviewSummary?
     @Published var policy: PermissionPolicy = .default
+    @Published var conflict: ConflictPolicy = .default
     @Published var dlp: DLPPolicy = ManagedDefaults.dlpPolicy()
     @Published var network: NetworkConfig = .default
     @Published var jobLog = JobLog()
@@ -27,12 +28,21 @@ final class AppModel: ObservableObject {
     @Published var showConnectSheet = false
     @Published var libraryWarning: String?
     @Published var lastError: String?
+    @Published var indexedBytes: UInt64 = 0
 
     let bookmarkStore = BookmarkStore()
     let peerConnector = PeerConnector()
     let bonjour = BonjourBrowser()
     let transfer = TransferSession()
     let permissionApplier = PermissionApplier()
+
+    private var fileIndex = LocalFileIndex()
+    private let indexURL: URL = {
+        let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
+            ?? FileManager.default.temporaryDirectory
+        return base.appendingPathComponent("Watari", isDirectory: true)
+            .appendingPathComponent("local-index.json")
+    }()
 
     var canPreview: Bool { !folderBookmarks.isEmpty && selectedPeerID != nil && phase != .copying }
     var canStart: Bool { phase == .previewReady }
@@ -43,31 +53,39 @@ final class AppModel: ObservableObject {
         peers.first { $0.id == selectedPeerID }
     }
 
+    init() {
+        if let loaded = try? LocalFileIndex.load(from: indexURL) {
+            fileIndex = loaded
+            indexedBytes = loaded.totalBytes()
+        }
+    }
+
     func addFolder() {
         guard let url = bookmarkStore.pickFolder() else { return }
+        ingestFolder(url)
+    }
+
+    func addConvenience(_ target: ConvenienceTarget) {
+        guard let url = bookmarkStore.pickConvenience(target) else { return }
+        ingestFolder(url)
+    }
+
+    private func ingestFolder(_ url: URL) {
         do {
             let entry = try bookmarkStore.save(url: url)
+            if folderBookmarks.contains(where: { $0.path == entry.path }) {
+                statusMessage = "\(entry.displayName) is already in this job."
+                return
+            }
             folderBookmarks.append(entry)
             libraryWarning = Denylist().warningForSelectingLibraryRoot(url.path)
-            phase = selectedPeerID == nil ? .waitingForPeer : (preview == nil ? .waitingForPeer : phase)
+            preview = nil
             if selectedPeerID == nil {
                 phase = .waitingForPeer
                 statusMessage = "Folder added. Connect a peer to continue."
             } else {
-                statusMessage = "Folder added. Run Preview before starting."
-                phase = .noFolders
-                // keep folders; move to waiting if we had peer
                 phase = .waitingForPeer
                 statusMessage = "Run Preview to see what will copy."
-            }
-            if !folderBookmarks.isEmpty {
-                if selectedPeerID == nil {
-                    phase = .waitingForPeer
-                } else {
-                    // ready to preview — use a dedicated soft state
-                    phase = .waitingForPeer
-                    statusMessage = "Run Preview to see what will copy."
-                }
             }
         } catch {
             lastError = error.localizedDescription
@@ -75,6 +93,10 @@ final class AppModel: ObservableObject {
     }
 
     func removeFolder(_ id: BookmarkEntry.ID) {
+        if let entry = folderBookmarks.first(where: { $0.id == id }) {
+            fileIndex.roots.removeValue(forKey: entry.path)
+            persistIndex()
+        }
         folderBookmarks.removeAll { $0.id == id }
         preview = nil
         if folderBookmarks.isEmpty {
@@ -85,15 +107,43 @@ final class AppModel: ObservableObject {
 
     func preview() {
         guard canPreview else { return }
-        // Placeholder scan: build empty destinations until Mac scanner fills real metadata.
-        let sources: [FileMetadata] = folderBookmarks.map {
-            FileMetadata(relativePath: $0.displayName, isDirectory: true, mode: 0o755)
+        do {
+            var sources: [FileMetadata] = []
+            var skipped: [(path: String, reason: SkipReason)] = []
+            for folder in folderBookmarks {
+                let url = try bookmarkStore.startAccess(to: folder)
+                defer { bookmarkStore.stopAccess(to: url) }
+                let scanned = try FileScanner.scan(
+                    root: url,
+                    displayRoot: folder.displayName,
+                    denylist: Denylist()
+                )
+                sources.append(contentsOf: scanned.entries)
+                skipped.append(contentsOf: scanned.skipped)
+                fileIndex.replace(rootPath: folder.path, metadata: scanned.entries)
+            }
+            persistIndex()
+
+            // Destination inventory from peer is M2; hash-skip/keep-both still work when destinations are supplied.
+            let destinations: [String: FileMetadata] = [:]
+            let receiving = permissionApplier.currentIdentity()
+            let summary = PreviewDiff.build(
+                sources: sources,
+                destinations: destinations,
+                skipped: skipped,
+                policy: policy,
+                conflict: conflict,
+                dlp: dlp,
+                receiving: receiving
+            )
+            preview = summary
+            phase = .previewReady
+            statusMessage =
+                "Preview ready — \(summary.copy) copy, \(summary.update) update, \(summary.unchanged) unchanged, \(summary.keepBoth) keep both, \(summary.skip) skip · \(ByteCountFormatter.string(fromByteCount: Int64(indexedBytes), countStyle: .file)) indexed"
+        } catch {
+            lastError = error.localizedDescription
+            statusMessage = "Preview failed — \(error.localizedDescription)"
         }
-        let receiving = permissionApplier.currentIdentity()
-        let summary = PreviewDiff.build(sources: sources, policy: policy, dlp: dlp, receiving: receiving)
-        preview = summary
-        phase = .previewReady
-        statusMessage = "Preview ready — \(summary.copy) copy, \(summary.update) update, \(summary.skip) skip."
     }
 
     func start() {
@@ -101,12 +151,14 @@ final class AppModel: ObservableObject {
         phase = .copying
         statusMessage = "Copying to \(peer.displayName)…"
         progressFraction = 0
+        let conflictPolicy = conflict
         Task {
             do {
                 try await transfer.run(
                     folders: folderBookmarks,
                     peer: peer,
                     policy: policy,
+                    conflict: conflictPolicy,
                     network: network,
                     connector: peerConnector,
                     applier: permissionApplier,
@@ -161,5 +213,10 @@ final class AppModel: ObservableObject {
             phase = .waitingForPeer
             statusMessage = "Peer connected. Run Preview."
         }
+    }
+
+    private func persistIndex() {
+        indexedBytes = fileIndex.totalBytes()
+        try? fileIndex.save(to: indexURL)
     }
 }

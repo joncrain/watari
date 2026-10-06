@@ -48,7 +48,13 @@ public enum TransferCodec {
             throw CodecError.unknownFrameType(typeByte)
         }
         let lengthBytes = buffer.subdata(in: buffer.startIndex.advanced(by: 1)..<buffer.startIndex.advanced(by: 5))
-        let length = lengthBytes.withUnsafeBytes { $0.load(as: UInt32.self).bigEndian }
+        let length = lengthBytes.withUnsafeBytes { raw -> UInt32 in
+            var value: UInt32 = 0
+            Swift.withUnsafeMutableBytes(of: &value) { dest in
+                dest.copyMemory(from: UnsafeRawBufferPointer(rebasing: raw.prefix(4)))
+            }
+            return UInt32(bigEndian: value)
+        }
         guard length <= maxPayloadSize else {
             throw CodecError.payloadTooLarge(Int(length))
         }
@@ -91,12 +97,20 @@ public struct HelloPayload: Codable, Sendable, Equatable {
 public struct JobManifestPayload: Codable, Sendable, Equatable {
     public var jobId: String
     public var policy: PermissionPolicy
+    public var conflict: ConflictPolicy
     public var fileCount: Int
     public var totalBytes: UInt64
 
-    public init(jobId: String, policy: PermissionPolicy, fileCount: Int, totalBytes: UInt64) {
+    public init(
+        jobId: String,
+        policy: PermissionPolicy,
+        conflict: ConflictPolicy = .default,
+        fileCount: Int,
+        totalBytes: UInt64
+    ) {
         self.jobId = jobId
         self.policy = policy
+        self.conflict = conflict
         self.fileCount = fileCount
         self.totalBytes = totalBytes
     }

@@ -67,6 +67,24 @@ final class PermissionApplier: Sendable {
         }
         #endif
 
-        return applied.exceptions
+        var exceptions = applied.exceptions
+        if policy.remapOwnerToReceivingUser {
+            let actualUID: UInt32?
+            if let number = try? url.resourceValues(forKeys: [.fileOwnerAccountIDKey]).fileOwnerAccountID {
+                actualUID = UInt32(truncating: number)
+            } else {
+                actualUID = nil
+            }
+            if let failure = OwnerVerification.verify(
+                relativePath: source.relativePath,
+                actualUID: actualUID,
+                expectedUID: receiving.uid,
+                remapping: true
+            ) {
+                exceptions.append(failure)
+            }
+        }
+
+        return exceptions
     }
 }

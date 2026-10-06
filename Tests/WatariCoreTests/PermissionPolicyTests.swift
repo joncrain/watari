@@ -64,4 +64,21 @@ struct PermissionPolicyTests {
         #expect(applied.exceptions.contains { $0.code == .ownerKeepRequiresAdmin })
         #expect(applied.metadata.uid == 502)
     }
+
+    @Test("owner verify fails on mismatch")
+    func ownerVerify() {
+        let failure = OwnerVerification.verify(
+            relativePath: "a.txt",
+            actualUID: 502,
+            expectedUID: 501,
+            remapping: true
+        )
+        #expect(failure?.code == .ownerVerifyFailed)
+        #expect(OwnerVerification.verify(
+            relativePath: "a.txt",
+            actualUID: 501,
+            expectedUID: 501,
+            remapping: true
+        ) == nil)
+    }
 }

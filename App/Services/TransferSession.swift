@@ -29,6 +29,7 @@ final class TransferSession: @unchecked Sendable {
         folders: [BookmarkEntry],
         peer: PeerRecord,
         policy: PermissionPolicy,
+        conflict: ConflictPolicy = .default,
         network: NetworkConfig,
         connector: PeerConnector,
         applier: PermissionApplier,
@@ -40,11 +41,18 @@ final class TransferSession: @unchecked Sendable {
         defer { connection.cancel() }
 
         var sources: [FileMetadata] = []
+        var skipped: [(path: String, reason: SkipReason)] = []
         var roots: [(BookmarkEntry, URL)] = []
         for folder in folders {
             let url = try bookmarkStore.startAccess(to: folder)
             roots.append((folder, url))
-            sources.append(contentsOf: try scan(root: url, displayRoot: folder.displayName))
+            let scanned = try FileScanner.scan(
+                root: url,
+                displayRoot: folder.displayName,
+                denylist: denylist
+            )
+            sources.append(contentsOf: scanned.entries)
+            skipped.append(contentsOf: scanned.skipped)
         }
         defer {
             for (_, url) in roots {
@@ -60,16 +68,21 @@ final class TransferSession: @unchecked Sendable {
         let preview = PreviewDiff.build(
             sources: sources,
             denylist: denylist,
+            skipped: skipped,
             policy: policy,
+            conflict: conflict,
             dlp: dlp,
             receiving: receiving
         )
-        let toSend = preview.items.filter { $0.action == .copy || $0.action == .update }
+        let toSend = preview.items.filter {
+            $0.action == .copy || $0.action == .update || $0.action == .keepBoth
+        }
         let totalBytes = toSend.compactMap(\.source?.size).reduce(UInt64(0), +)
 
         let manifest = JobManifestPayload(
             jobId: UUID().uuidString,
             policy: policy,
+            conflict: conflict,
             fileCount: toSend.count,
             totalBytes: totalBytes
         )
@@ -108,9 +121,11 @@ final class TransferSession: @unchecked Sendable {
         on connection: NWConnection,
         destinationRoot: URL,
         policy: PermissionPolicy,
+        conflict: ConflictPolicy = .default,
         applier: PermissionApplier,
         progress: @escaping (Double, String?) -> Void
     ) async throws {
+        _ = conflict
         cancelled = false
         var expectedFiles = 0
         var done = 0
@@ -161,69 +176,6 @@ final class TransferSession: @unchecked Sendable {
             }
         }
         throw TransferSessionError.cancelled
-    }
-
-    private func scan(root: URL, displayRoot: String) throws -> [FileMetadata] {
-        var results: [FileMetadata] = []
-        let fm = FileManager.default
-        guard let enumerator = fm.enumerator(
-            at: root,
-            includingPropertiesForKeys: [
-                .isDirectoryKey, .isSymbolicLinkKey, .fileSizeKey,
-                .contentModificationDateKey, .creationDateKey,
-            ],
-            options: [.skipsPackageDescendants]
-        ) else { return results }
-
-        results.append(
-            FileMetadata(
-                relativePath: displayRoot,
-                isDirectory: true,
-                mode: 0o755,
-                modificationTime: Date()
-            )
-        )
-
-        for case let fileURL as URL in enumerator {
-            let values = try fileURL.resourceValues(forKeys: [
-                .isDirectoryKey, .isSymbolicLinkKey, .fileSizeKey,
-                .contentModificationDateKey, .creationDateKey,
-            ])
-            let rel = displayRoot + "/" + fileURL.path.replacingOccurrences(of: root.path + "/", with: "")
-            if denylist.blocks(relativePath: rel) { continue }
-
-            let isSymlink = values.isSymbolicLink ?? false
-            let isDir = values.isDirectory ?? false
-            if isSymlink {
-                let target = (try? fm.destinationOfSymbolicLink(atPath: fileURL.path)) ?? ""
-                // Do not follow; record link only.
-                results.append(
-                    FileMetadata(
-                        relativePath: rel,
-                        isDirectory: false,
-                        isSymlink: true,
-                        symlinkTarget: target,
-                        size: 0,
-                        mode: 0o755,
-                        modificationTime: values.contentModificationDate ?? Date()
-                    )
-                )
-                enumerator.skipDescendants()
-                continue
-            }
-
-            results.append(
-                FileMetadata(
-                    relativePath: rel,
-                    isDirectory: isDir,
-                    size: UInt64(values.fileSize ?? 0),
-                    mode: isDir ? 0o755 : 0o644,
-                    modificationTime: values.contentModificationDate ?? Date(),
-                    creationTime: values.creationDate
-                )
-            )
-        }
-        return results
     }
 
     private func send(_ data: Data, on connection: NWConnection) async throws {

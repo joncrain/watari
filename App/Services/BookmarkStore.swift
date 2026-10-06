@@ -1,19 +1,55 @@
 import AppKit
 import Foundation
 
+enum ConvenienceTarget: String, CaseIterable, Identifiable {
+    case documents
+    case desktop
+    case downloads
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .documents: return "Documents"
+        case .desktop: return "Desktop"
+        case .downloads: return "Downloads"
+        }
+    }
+
+    var searchPath: FileManager.SearchPathDirectory {
+        switch self {
+        case .documents: return .documentDirectory
+        case .desktop: return .desktopDirectory
+        case .downloads: return .downloadsDirectory
+        }
+    }
+
+    var url: URL? {
+        FileManager.default.urls(for: searchPath, in: .userDomainMask).first
+    }
+}
+
 /// Security-scoped bookmark storage for chosen folder roots.
 final class BookmarkStore: @unchecked Sendable {
     private let defaultsKey = "watari.folderBookmarks"
 
-    func pickFolder() -> URL? {
+    func pickFolder(startingAt directory: URL? = nil) -> URL? {
         let panel = NSOpenPanel()
         panel.canChooseFiles = false
         panel.canChooseDirectories = true
         panel.allowsMultipleSelection = false
         panel.message = "Choose a folder for Watari to read. Watari will not follow symlinks outside this folder."
         panel.prompt = "Add Folder"
+        if let directory {
+            panel.directoryURL = directory
+        }
         guard panel.runModal() == .OK else { return nil }
         return panel.url
+    }
+
+    /// Convenience target: open panel starting at Documents / Desktop / Downloads (sandbox grant still required).
+    func pickConvenience(_ target: ConvenienceTarget) -> URL? {
+        pickFolder(startingAt: target.url)
     }
 
     func save(url: URL) throws -> BookmarkEntry {
