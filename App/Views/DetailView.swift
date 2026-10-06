@@ -120,7 +120,7 @@ struct DetailView: View {
     }
 
     private var previewList: some View {
-        List {
+        List(selection: $model.selectedPreviewPath) {
             if let preview = model.preview {
                 Section("Preview") {
                     LabeledContent("Copy", value: "\(preview.copy)")
@@ -133,6 +133,10 @@ struct DetailView: View {
                         "Indexed",
                         value: ByteCountFormatter.string(fromByteCount: Int64(model.indexedBytes), countStyle: .file)
                     )
+                    LabeledContent(
+                        "Peer inventory",
+                        value: model.peerInventoryAvailable ? "Yes" : "Unavailable"
+                    )
                 }
                 Section("Items") {
                     ForEach(preview.items, id: \.relativePath) { item in
@@ -144,8 +148,8 @@ struct DetailView: View {
                                     Text(reason.rawValue)
                                         .font(.caption)
                                         .foregroundStyle(.secondary)
-                                } else if let owner = item.source?.ownerName {
-                                    Text("owner \(owner)")
+                                } else {
+                                    Text("src \(item.source?.ownerName ?? "—") → dst \(item.destination?.ownerName ?? "—")")
                                         .font(.caption)
                                         .foregroundStyle(.secondary)
                                 }
@@ -154,6 +158,7 @@ struct DetailView: View {
                             Text(item.action.rawValue)
                                 .foregroundStyle(.secondary)
                         }
+                        .tag(item.relativePath)
                         .accessibilityElement(children: .combine)
                         .accessibilityLabel("\(item.relativePath), \(item.action.rawValue)")
                     }

@@ -29,11 +29,31 @@ struct InspectorView: View {
                 Toggle("Keep other xattrs", isOn: $model.policy.keepExtendedAttributes)
                 Toggle("Keep Finder flags", isOn: $model.policy.keepFinderFlags)
             }
+            if let item = model.selectedPreviewItem {
+                Section("Owners") {
+                    LabeledContent("Path", value: item.relativePath)
+                    LabeledContent("Source", value: ownerLabel(item.source))
+                    LabeledContent("Destination", value: ownerLabel(item.destination))
+                    if model.policy.remapOwnerToReceivingUser {
+                        Text("On apply, destination owner remaps to this Mac’s user.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+            }
             Section("Exceptions") {
                 LabeledContent("In last preview", value: "\(model.exceptionCount)")
             }
         }
         .formStyle(.grouped)
         .navigationTitle("Policy")
+    }
+
+    private func ownerLabel(_ meta: FileMetadata?) -> String {
+        guard let meta else { return "—" }
+        if let name = meta.ownerName {
+            return "\(name) (\(meta.uid))"
+        }
+        return "uid \(meta.uid)"
     }
 }

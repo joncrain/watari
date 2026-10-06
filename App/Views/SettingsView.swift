@@ -74,7 +74,23 @@ struct NetworkSettingsForm: View {
         Form {
             Section {
                 Toggle("Listen for inbound jobs", isOn: $model.network.listenEnabled)
+                    .onChange(of: model.network.listenEnabled) { _, _ in model.refreshListener() }
                 TextField("Port", value: $model.network.listenPort, format: .number)
+                    .onChange(of: model.network.listenPort) { _, _ in model.refreshListener() }
+                HStack {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Receive into")
+                        Text(model.receiveFolder?.path ?? "Choose a folder for inbound jobs")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(2)
+                    }
+                    Spacer()
+                    Button("Choose…") { model.chooseReceiveFolder() }
+                }
+                Text("Listening requires a receive folder (security-scoped). Peer Preview inventory is scanned under that root.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
                 Picker("Bind", selection: $model.network.bindMode) {
                     Text("Localhost").tag(BindMode.localhost)
                     Text("LAN interfaces").tag(BindMode.lan)

@@ -13,6 +13,8 @@ public enum FrameType: UInt8, Codable, Sendable {
     case error = 9
     case ping = 10
     case pong = 11
+    case inventoryRequest = 12
+    case inventoryResponse = 13
 }
 
 public struct WireFrame: Sendable, Equatable {
@@ -121,6 +123,28 @@ public struct FileHeaderPayload: Codable, Sendable, Equatable {
 
     public init(metadata: FileMetadata) {
         self.metadata = metadata
+    }
+}
+
+/// Sender asks the peer what already exists under these job root display names.
+public struct InventoryRequestPayload: Codable, Sendable, Equatable {
+    public var rootNames: [String]
+
+    public init(rootNames: [String]) {
+        self.rootNames = rootNames
+    }
+}
+
+/// Peer replies with scanned destination metadata (hashes + owners) for Preview.
+public struct InventoryResponsePayload: Codable, Sendable, Equatable {
+    public var entries: [FileMetadata]
+
+    public init(entries: [FileMetadata]) {
+        self.entries = entries
+    }
+
+    public var asDestinationMap: [String: FileMetadata] {
+        Dictionary(entries.map { ($0.relativePath, $0) }, uniquingKeysWith: { _, last in last })
     }
 }
 
