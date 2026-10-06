@@ -55,7 +55,7 @@ Or: **Actions → Release → Run workflow** → version `1.0.0` (creates tag `v
 
 1. Chosen folders only — security-scoped bookmarks, no Full Disk Access by default.
 2. Permissions are a product surface — preview what metadata will arrive.
-3. Explicit connect first — hostname/IP + port; Bonjour is optional Nearby.
+3. Nearby when allowed — tap a Mac on the same network; hostname/IP + port always works (required when Managed disables Nearby).
 4. TLS after pairing — pin peer keys; no trust-the-LAN.
 5. Stay out of enterprise identity — never touch profiles, TCC DB, or keychains.
 

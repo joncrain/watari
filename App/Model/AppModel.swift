@@ -497,12 +497,14 @@ final class AppModel: ObservableObject {
 
         guard receiveURL != nil || !offeredRoots.isEmpty else { return }
 
+        let advertiseBonjour = nearbyDiscoveryAllowed
         do {
             try jobListener.start(
                 port: network.listenPort,
                 receiveRoot: receiveURL,
                 offeredRoots: offeredRoots,
                 offerCatalog: catalog,
+                advertiseBonjour: advertiseBonjour,
                 applier: permissionApplier,
                 onIndexUpdate: { [weak self] received in
                     Task { @MainActor in
@@ -525,6 +527,33 @@ final class AppModel: ObservableObject {
         } catch {
             lastError = error.localizedDescription
         }
+    }
+
+    /// Nearby / Bonjour is allowed unless discovery is off/explicit-only or Managed denies it.
+    var nearbyDiscoveryAllowed: Bool {
+        network.discoveryMode == .nearby && !ManagedDefaults.denyBonjour
+    }
+
+    /// Pair to host/port and move into the offer-catalog phase.
+    func connectAndBrowse(
+        host: String,
+        port: Int,
+        displayName: String,
+        pairingCode: String = ""
+    ) async throws {
+        let name = displayName.isEmpty ? host : displayName
+        let record = try await peerConnector.pair(
+            host: host,
+            port: port,
+            displayName: name,
+            pairingCode: pairingCode
+        )
+        peers.append(record)
+        selectedPeerID = record.id
+        showConnectSheet = false
+        phase = .browsingOffers
+        statusMessage = "Peer connected. Loading offered folders…"
+        refreshPeerOffers()
     }
 
     private func persistIndex() {

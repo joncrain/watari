@@ -2,19 +2,38 @@ import Foundation
 import Network
 import WatariCore
 import CryptoKit
+import os.log
+
+private let peerLog = Logger(subsystem: "app.watari.mac", category: "PeerConnector")
 
 enum PeerConnectorError: LocalizedError {
     case invalidPort
     case handshakeFailed(String)
     case untrustedPeer
     case cancelled
+    case notListening
+    case localNetworkDenied
+    case connectionRefused
+    case tlsHandshakeFailed
 
     var errorDescription: String? {
         switch self {
-        case .invalidPort: return "Invalid port"
-        case .handshakeFailed(let s): return "Handshake failed: \(s)"
-        case .untrustedPeer: return "Peer public key does not match the pinned key"
-        case .cancelled: return "Cancelled"
+        case .invalidPort:
+            return "Invalid port number."
+        case .handshakeFailed(let s):
+            return s
+        case .untrustedPeer:
+            return "That Mac’s key doesn’t match the pinned peer. Remove it and pair again."
+        case .cancelled:
+            return "Connection cancelled."
+        case .notListening:
+            return "Couldn’t reach Watari on that Mac. On the source Mac: open Watari → Settings → turn on Listen for peers, and leave the app open."
+        case .localNetworkDenied:
+            return "Local Network access is off for Watari. System Settings → Privacy & Security → Local Network → enable Watari, then try again."
+        case .connectionRefused:
+            return "Connection refused. Check the host/port, allow Watari through the firewall if prompted, and confirm Listen is on."
+        case .tlsHandshakeFailed:
+            return "Secure connection failed (TLS). Update both Macs to the latest Watari, confirm Listen is on, then try again."
         }
     }
 }
@@ -46,7 +65,7 @@ final class PeerConnector: @unchecked Sendable {
 
     func openTLS(to peer: PeerRecord) async throws -> NWConnection {
         guard let host = peer.host, let port = peer.port else {
-            throw PeerConnectorError.handshakeFailed("Peer has no host/port")
+            throw PeerConnectorError.handshakeFailed("Peer has no host/port.")
         }
         _ = try await connectAndExchange(
             host: host,
@@ -55,7 +74,7 @@ final class PeerConnector: @unchecked Sendable {
             requirePinned: peer.publicKey.isEmpty ? nil : peer.publicKey
         )
         guard let connection else {
-            throw PeerConnectorError.handshakeFailed("No connection")
+            throw PeerConnectorError.handshakeFailed("No connection.")
         }
         return connection
     }
@@ -71,27 +90,15 @@ final class PeerConnector: @unchecked Sendable {
             throw PeerConnectorError.invalidPort
         }
 
-        // TLS options — pin after pairing using application-level key check on Hello.
-        let tls = NWProtocolTLS.Options()
-        let tcp = NWProtocolTCP.Options()
-        let params = NWParameters(tls: tls, tcp: tcp)
+        let params = WatariTLS.clientParameters()
         let connection = NWConnection(host: nwHost, port: nwPort, using: params)
         self.connection = connection
 
-        try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Void, Error>) in
-            connection.stateUpdateHandler = { state in
-                switch state {
-                case .ready:
-                    cont.resume()
-                case .failed(let error):
-                    cont.resume(throwing: error)
-                case .cancelled:
-                    cont.resume(throwing: PeerConnectorError.cancelled)
-                default:
-                    break
-                }
-            }
-            connection.start(queue: .global(qos: .userInitiated))
+        do {
+            try await waitUntilReady(connection)
+        } catch {
+            connection.cancel()
+            throw mapNetworkError(error)
         }
 
         let hello = HelloPayload(
@@ -100,7 +107,6 @@ final class PeerConnector: @unchecked Sendable {
             publicKey: publicKeyData
         )
         var payload = try TransferCodec.encodeJSON(.hello, hello)
-        // Append pairing code as a second frame for first-time pair
         if !pairingCode.isEmpty {
             let codeData = Data(pairingCode.utf8)
             payload.append(try TransferCodec.encode(WireFrame(type: .pairChallenge, payload: codeData)))
@@ -110,7 +116,7 @@ final class PeerConnector: @unchecked Sendable {
         let frames = FrameBuffer()
         let frame = try await receiveFrame(on: connection, buffer: frames)
         guard frame.type == .hello else {
-            throw PeerConnectorError.handshakeFailed("Expected hello")
+            throw PeerConnectorError.handshakeFailed("Expected hello from peer.")
         }
         let peerHello = try TransferCodec.decodeJSON(frame, as: HelloPayload.self)
 
@@ -120,6 +126,75 @@ final class PeerConnector: @unchecked Sendable {
         }
 
         return peerHello.publicKey
+    }
+
+    private func waitUntilReady(_ connection: NWConnection) async throws {
+        try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Void, Error>) in
+            let lock = NSLock()
+            var resumed = false
+            func resumeOnce(_ result: Result<Void, Error>) {
+                lock.lock()
+                defer { lock.unlock() }
+                guard !resumed else { return }
+                resumed = true
+                switch result {
+                case .success: cont.resume()
+                case .failure(let error): cont.resume(throwing: error)
+                }
+            }
+            connection.stateUpdateHandler = { state in
+                switch state {
+                case .ready:
+                    resumeOnce(.success(()))
+                case .failed(let error):
+                    resumeOnce(.failure(error))
+                case .cancelled:
+                    resumeOnce(.failure(PeerConnectorError.cancelled))
+                case .waiting(let error):
+                    // Surf waiting errors that won't recover (e.g. refused).
+                    let ns = error as NWError
+                    if case .posix(let code) = ns, code == .ECONNREFUSED {
+                        resumeOnce(.failure(error))
+                    }
+                default:
+                    break
+                }
+            }
+            connection.start(queue: .global(qos: .userInitiated))
+        }
+    }
+
+    private func mapNetworkError(_ error: Error) -> PeerConnectorError {
+        peerLog.error("Network connect failed: \(error.localizedDescription, privacy: .public)")
+        let text = error.localizedDescription
+        if let nw = error as? NWError {
+            switch nw {
+            case .tls(let status):
+                // errSSLInternal = -9810
+                if status == -9810 || text.contains("-9810") {
+                    return .tlsHandshakeFailed
+                }
+                return .tlsHandshakeFailed
+            case .posix(let code):
+                if code == .ECONNREFUSED { return .connectionRefused }
+                if code == .EHOSTUNREACH || code == .ENETUNREACH { return .notListening }
+                break
+            default:
+                break
+            }
+        }
+        if text.contains("-9810") || text.lowercased().contains("ssl") || text.lowercased().contains("tls") {
+            return .tlsHandshakeFailed
+        }
+        if text.lowercased().contains("refused") {
+            return .connectionRefused
+        }
+        if text.lowercased().contains("local network") || text.contains("-72008") {
+            return .localNetworkDenied
+        }
+        return .handshakeFailed(
+            "Couldn’t connect (\(text)). On the source Mac enable Listen, allow Local Network for Watari, and check firewall/port."
+        )
     }
 
     private func send(_ data: Data, on connection: NWConnection) async throws {
@@ -146,7 +221,7 @@ final class PeerConnector: @unchecked Sendable {
                         return
                     }
                     guard let data = content, !data.isEmpty else {
-                        cont.resume(throwing: PeerConnectorError.handshakeFailed("Empty response"))
+                        cont.resume(throwing: PeerConnectorError.handshakeFailed("Empty response from peer."))
                         return
                     }
                     cont.resume(returning: data)

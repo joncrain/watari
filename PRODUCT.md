@@ -41,9 +41,9 @@ Not Migration Assistant. Not cloud sync. A calm, first-party-feeling Mac utility
 - Preview: unchanged / copy / update / skip / permission exceptions.
 - Permission policy: remap owner to receiving user by default; keep mode; ACL/xattr rules; strip quarantine by default.
 - Built-in denylist: keychains, TCC database, configuration profiles.
-- Connect by hostname / FQDN / IP + port; TLS with pinned peer keys after pairing.
+- Connect via Nearby device list (Bonjour) when discovery allows, or hostname / FQDN / IP + port; TLS with pinned peer keys after pairing.
 - Configurable listen, bind, port, discovery mode, timeouts, optional bandwidth cap.
-- Optional Bonjour “Nearby” when discovery mode allows; off under Managed defaults.
+- Nearby defaults on for consumer installs; off under Managed defaults (`DenyBonjour` / explicit discovery).
 - Exception log exportable for audit.
 
 **Must not**
@@ -64,7 +64,7 @@ Not Migration Assistant. Not cloud sync. A calm, first-party-feeling Mac utility
 
 1. **Chosen folders only** — bookmarks beat Full Disk Access.
 2. **Permissions are the product** — preview metadata outcomes.
-3. **Explicit connect first** — Bonjour is convenience.
+3. **Connect without guessing** — Nearby when the LAN allows; host/port always works and is required on Managed / segmented nets.
 4. **Pin trust** — TLS after pairing; revoke peers.
 5. **Stay out of identity** — never a second Migration Assistant.
 

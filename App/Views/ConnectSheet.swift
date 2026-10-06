@@ -1,66 +1,66 @@
 import SwiftUI
 import WatariCore
 
+/// Connect sheet: Nearby device list first (when allowed); host/port as advanced.
 struct ConnectSheet: View {
     @EnvironmentObject private var model: AppModel
     @Environment(\.dismiss) private var dismiss
 
-    @State private var tab: Tab = .explicit
+    @State private var showManual = false
     @State private var host = ""
     @State private var port = "59234"
     @State private var displayName = ""
     @State private var pairingCode = ""
     @State private var nearby: [BonjourPeer] = []
+    @State private var connectingID: String?
     @State private var busy = false
     @State private var errorText: String?
 
-    enum Tab: String, CaseIterable {
-        case explicit = "Host"
-        case nearby = "Nearby"
-    }
-
-    private var nearbyAllowed: Bool {
-        model.network.discoveryMode == .nearby && !ManagedDefaults.denyBonjour
-    }
+    private var nearbyAllowed: Bool { model.nearbyDiscoveryAllowed }
 
     var body: some View {
         VStack(spacing: 0) {
             Text("Connect peer")
                 .font(.title2.weight(.semibold))
                 .padding()
-            if nearbyAllowed {
-                Picker("Method", selection: $tab) {
-                    ForEach(Tab.allCases, id: \.self) { Text($0.rawValue).tag($0) }
-                }
-                .pickerStyle(.segmented)
-                .padding(.horizontal)
-            }
+
             Group {
-                switch tab {
-                case .explicit:
-                    explicitForm
-                case .nearby:
+                if nearbyAllowed {
                     nearbyList
+                    DisclosureGroup("Connect by host / port", isExpanded: $showManual) {
+                        explicitForm
+                    }
+                    .padding(.horizontal)
+                    .padding(.bottom, 8)
+                } else {
+                    explicitForm
+                        .padding(.horizontal)
                 }
             }
-            .padding()
+
             if let errorText {
                 Text(errorText)
                     .foregroundStyle(.red)
+                    .font(.callout)
                     .padding(.horizontal)
+                    .padding(.bottom, 8)
             }
+
             HStack {
                 Button("Cancel") { dismiss() }
                     .keyboardShortcut(.cancelAction)
                 Spacer()
-                Button("Pair") { pair() }
-                    .keyboardShortcut(.defaultAction)
-                    .disabled(busy || (tab == .explicit && host.isEmpty))
+                if !nearbyAllowed || showManual {
+                    Button(busy ? "Connecting…" : "Connect") { pairManual() }
+                        .keyboardShortcut(.defaultAction)
+                        .disabled(busy || host.isEmpty || connectingID != nil)
+                }
             }
             .padding()
         }
+        .frame(minWidth: 420, minHeight: nearbyAllowed ? 360 : 280)
         .onAppear {
-            if !nearbyAllowed { tab = .explicit }
+            if !nearbyAllowed { showManual = true }
             if nearbyAllowed {
                 model.bonjour.start { peers in
                     nearby = peers
@@ -77,7 +77,7 @@ struct ConnectSheet: View {
             TextField("Port", text: $port)
             TextField("Pairing code", text: $pairingCode)
                 .help("Short code shown on the other Mac")
-            Text("Primary path for enterprise networks. TLS pins the peer key after pairing.")
+            Text("Use this on segmented networks where Nearby is blocked. TLS pins the peer key after pairing.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
         }
@@ -85,43 +85,77 @@ struct ConnectSheet: View {
     }
 
     private var nearbyList: some View {
-        List(nearby) { peer in
-            Button {
-                host = peer.host
-                port = String(peer.port)
-                displayName = peer.name
-            } label: {
-                Label(peer.name, systemImage: "dot.radiowaves.left.and.right")
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Nearby Macs")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.secondary)
+                .textCase(.uppercase)
+                .padding(.horizontal)
+
+            List(nearby) { peer in
+                Button {
+                    connectNearby(peer)
+                } label: {
+                    HStack {
+                        Label(peer.name, systemImage: "laptopcomputer")
+                        Spacer()
+                        if connectingID == peer.id {
+                            ProgressView()
+                                .controlSize(.small)
+                        } else {
+                            Text("\(peer.host):\(peer.port)")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .disabled(busy || connectingID != nil)
             }
-        }
-        .overlay {
-            if nearby.isEmpty {
-                Text("No Nearby Macs on this segment")
-                    .foregroundStyle(.secondary)
+            .frame(minHeight: 140, maxHeight: 200)
+            .overlay {
+                if nearby.isEmpty {
+                    Text("Looking for Macs on this network…")
+                        .foregroundStyle(.secondary)
+                }
             }
         }
     }
 
-    private func pair() {
+    private func connectNearby(_ peer: BonjourPeer) {
+        connectingID = peer.id
+        errorText = nil
+        Task {
+            do {
+                try await model.connectAndBrowse(
+                    host: peer.host,
+                    port: peer.port,
+                    displayName: peer.name
+                )
+                await MainActor.run { dismiss() }
+            } catch {
+                await MainActor.run {
+                    errorText = error.localizedDescription
+                    connectingID = nil
+                }
+            }
+        }
+    }
+
+    private func pairManual() {
         busy = true
         errorText = nil
         Task {
             do {
                 let portValue = Int(port) ?? model.network.listenPort
-                let name = displayName.isEmpty ? host : displayName
-                let record = try await model.peerConnector.pair(
+                try await model.connectAndBrowse(
                     host: host,
                     port: portValue,
-                    displayName: name,
+                    displayName: displayName.isEmpty ? host : displayName,
                     pairingCode: pairingCode
                 )
                 await MainActor.run {
-                    model.peers.append(record)
-                    model.selectedPeerID = record.id
-                    model.showConnectSheet = false
-                    model.phase = .browsingOffers
-                    model.statusMessage = "Peer connected. Loading offered folders…"
-                    model.refreshPeerOffers()
                     busy = false
                     dismiss()
                 }

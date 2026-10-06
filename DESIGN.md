@@ -17,12 +17,12 @@ Native Mac tool in the spirit of first-party utilities — Migration Assistant c
 
 ## Composition
 
-- **First screen:** Connect (host/IP/port, Nearby if allowed). No folder tree until a peer is connected.
+- **First screen:** Connect — Nearby device list when allowed (tap to pair); host/IP/port as secondary. No folder tree until a peer is connected.
 - **After connect:** **Folders** checklist from the **source Mac’s offer catalog** (sizes from that Mac’s `LocalFileIndex`). Separate **Services** section below (Coming soon). Footer under Folders.
 - **Sidebar + inspector:** Hidden/collapsed by default; reveal via toolbar.
 - **Toolbar:** Connect; after peer — Preview / Start (pull) / Stop; sidebar/inspector toggles.
 - **Settings:** Receive folder (destination); Listen + offered folders (source role). “Offer another folder…” is source-only.
-- **Connect sheet:** Host / port primary; Nearby secondary when enabled.
+- **Connect sheet:** Nearby list primary when enabled; host / port under “Connect by host / port”.
 
 
 ## Required states (real screens)
