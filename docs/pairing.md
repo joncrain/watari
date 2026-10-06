@@ -24,16 +24,32 @@ Managed defaults (`DenyBonjour`, `ManagedMode`, or `DiscoveryMode=explicit|off`)
 
 Watari does **not** use the Screen Sharing / Remote Management privilege. Typical prompts:
 
-| Prompt | Why |
-|--------|-----|
-| **Local Network** | Browse Nearby and open outbound peer connections |
-| **Firewall** | Allow inbound Listen on the chosen port |
-| **Files and Folders** / open panel | Security-scoped bookmarks for offered / receive folders |
+| Prompt | Why | Admin password? |
+|--------|-----|-----------------|
+| **Local Network** | Browse Nearby and open outbound peer connections | Usually no (Privacy toggle) |
+| **Firewall — “accept incoming connections?”** | Source is Listening; destination’s Connect hits TCP on the listen port | **Yes, often** — expected on first allow |
+| **Files and Folders** / open panel | Security-scoped bookmarks for offered / receive folders | No |
+| ~~Full Disk Access~~ | **Not requested in v1** — bookmarks only | — |
+
+### Source admin prompt when destination hits Connect
+
+That dialog is almost certainly **Application Firewall**, not keychain and not FDA. It appears when an inbound connection reaches Watari’s listen socket (default **59234**) and Watari is not yet allowed for incoming traffic.
+
+- **Expected:** yes, once per app binary identity while Firewall is on.
+- **Debug / ad-hoc builds** (`codesign` Signature=adhoc): macOS often asks **again after every rebuild** because the code directory hash changed.
+- **Not fixed by Full Disk Access.** FDA does not authorize firewall or Local Network; PRODUCT.md keeps FDA out of v1 on purpose.
+- **Keychain “dev key”** was a separate bug (login-keychain TLS identity) and is fixed — Watari no longer uses the login keychain for transport TLS.
+
+### How to preapprove (no FDA)
+
+1. **Manual (this Mac):** System Settings → **Network → Firewall → Options…** → add **Watari** → Allow incoming. Or click Allow on the dialog the first time Connect succeeds in reaching Listen.
+2. **IT / MDM:** ship an Application Firewall payload (or script `socketfilterfw --add` / `--unblockapp` on the Watari.app path) so inbound is allowed before users pair. Also allow **Local Network** for `app.watari.mac` via Privacy TCC profiles where your MDM supports it.
+3. **Distribution (later):** Developer ID **codesign + notarize** so Gatekeeper and Firewall treat the app as a stable, identified binary — fewer repeat prompts than ad-hoc Debug builds.
 
 ### System Settings checklist
 
 1. **Privacy & Security → Local Network** — enable Watari on both Macs.
-2. **Network → Firewall** — allow Watari (or open TCP 59234 between the two hosts).
+2. **Network → Firewall** — allow Watari for incoming (source especially). Open TCP **59234** between hosts if you use a hardware firewall.
 3. Source Mac: Watari → **Settings → Listen for peers** on, leave the app open, and offer at least one folder (or set a receive folder so Listen can start).
 4. Destination Mac: Connect via Nearby or host/port, then choose folders from the peer’s offer catalog.
 

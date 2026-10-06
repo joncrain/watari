@@ -35,7 +35,7 @@ struct SettingsView: View {
                             format: IntegerFormatStyle<Int>().grouping(.never)
                         )
                         .onChange(of: model.network.listenPort) { _, _ in model.refreshListener() }
-                        Text("When listening, peers can see folders you offer and pull them.")
+                        Text("When listening, peers can see folders you offer and pull them. The first inbound Connect may show a macOS Firewall dialog (admin password) — allow Watari once. Full Disk Access does not replace that.")
                             .font(.caption)
                             .foregroundStyle(.secondary)
                         ForEach(model.offeredFolders) { folder in

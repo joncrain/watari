@@ -69,11 +69,14 @@ Example payload fragment:
 
 ## Network checklist for IT
 
-1. Open the chosen TCP port between the two Macs (same VLAN or routed).
+1. Open the chosen TCP port between the two Macs (same VLAN or routed). Default **59234**.
 2. Prefer FQDN or management IP in tickets; ship a connection profile JSON if helpful.
 3. Leave Bonjour off unless both Macs share a link-local segment with mDNS allowed.
-4. Pair once; revoke the peer key when a machine leaves the fleet.
-5. Export the exception log after large jobs for change records.
+4. **Preapprove Application Firewall** for Watari on source Macs (MDM firewall payload or `socketfilterfw --add` / `--unblockapp` on the installed `.app`). The first inbound Connect otherwise shows an **admin** “accept incoming connections” dialog. Full Disk Access does **not** cover this.
+5. Preapprove **Local Network** for `app.watari.mac` via Privacy / TCC profiles where available.
+6. Pair once; revoke the peer key when a machine leaves the fleet.
+7. Export the exception log after large jobs for change records.
+8. Prefer Developer ID–signed + notarized builds for fleet installs so Firewall does not re-prompt on every ad-hoc Debug hash.
 
 ## Connection profile (export/import)
 

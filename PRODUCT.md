@@ -30,7 +30,8 @@ Not Migration Assistant. Not cloud sync. A calm, first-party-feeling Mac utility
 
 - Both machines run Watari.
 - Sandboxed; folders added via the system open panel; security-scoped bookmarks.
-- Full Disk Access is not requested in v1.
+- Full Disk Access is not requested in v1 (bookmarks only). FDA does **not** replace Firewall or Local Network approval when the source Listens.
+- First inbound Connect may trigger macOS Application Firewall’s “accept incoming connections” dialog (often with admin password); preapprove via Firewall settings / MDM, or reduce repeats with Developer ID + notarization later.
 - Linux CI runs `WatariCore` tests only; UI polish is verified on a Mac.
 
 ## Capabilities and Constraints
