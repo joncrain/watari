@@ -130,31 +130,34 @@ final class PeerConnector: @unchecked Sendable {
 
     private func waitUntilReady(_ connection: NWConnection) async throws {
         try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Void, Error>) in
-            let lock = NSLock()
-            var resumed = false
-            func resumeOnce(_ result: Result<Void, Error>) {
-                lock.lock()
-                defer { lock.unlock() }
-                guard !resumed else { return }
-                resumed = true
-                switch result {
-                case .success: cont.resume()
-                case .failure(let error): cont.resume(throwing: error)
+            final class Gate: @unchecked Sendable {
+                private let lock = NSLock()
+                private var resumed = false
+                func resume(_ result: Result<Void, Error>, cont: CheckedContinuation<Void, Error>) {
+                    lock.lock()
+                    defer { lock.unlock() }
+                    guard !resumed else { return }
+                    resumed = true
+                    switch result {
+                    case .success: cont.resume()
+                    case .failure(let error): cont.resume(throwing: error)
+                    }
                 }
             }
+            let gate = Gate()
             connection.stateUpdateHandler = { state in
                 switch state {
                 case .ready:
-                    resumeOnce(.success(()))
+                    gate.resume(.success(()), cont: cont)
                 case .failed(let error):
-                    resumeOnce(.failure(error))
+                    gate.resume(.failure(error), cont: cont)
                 case .cancelled:
-                    resumeOnce(.failure(PeerConnectorError.cancelled))
+                    gate.resume(.failure(PeerConnectorError.cancelled), cont: cont)
                 case .waiting(let error):
                     // Surf waiting errors that won't recover (e.g. refused).
                     let ns = error as NWError
                     if case .posix(let code) = ns, code == .ECONNREFUSED {
-                        resumeOnce(.failure(error))
+                        gate.resume(.failure(error), cont: cont)
                     }
                 default:
                     break

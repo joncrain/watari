@@ -19,7 +19,7 @@ enum WatariTLS {
     private static let queue = DispatchQueue(label: "app.watari.mac.tls")
 
     /// Identity for this Mac’s listener (created once, stored in keychain).
-    private static let localIdentity: SecIdentity? = {
+    nonisolated(unsafe) private static let localIdentity: SecIdentity? = {
         if let existing = loadIdentity() { return existing }
         do {
             return try createAndStoreIdentity()
