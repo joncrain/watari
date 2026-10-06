@@ -55,7 +55,7 @@ struct TransferSelectionView: View {
 
             borderedTree
                 .frame(maxWidth: 540)
-                .frame(minHeight: 240, maxHeight: 360)
+                .frame(minHeight: 280, maxHeight: 400)
                 .padding(.top, 20)
                 .padding(.horizontal, 40)
 
@@ -100,11 +100,12 @@ struct TransferSelectionView: View {
                 TransferTreeRow(
                     title: "Users",
                     systemImage: "person.2.fill",
-                    bytes: sizes.bytes(for: homeURL.path),
+                    trailing: sizeLabel(for: homeURL.path),
                     depth: 0,
                     isExpanded: $sizes.usersExpanded,
                     canExpand: true,
                     selection: usersSelection,
+                    enabled: true,
                     onToggle: { selectAllHomeFolders($0) }
                 )
 
@@ -112,11 +113,12 @@ struct TransferSelectionView: View {
                     TransferTreeRow(
                         title: userName,
                         systemImage: "person.crop.circle.fill",
-                        bytes: sizes.bytes(for: homeURL.path),
+                        trailing: sizeLabel(for: homeURL.path),
                         depth: 1,
                         isExpanded: $sizes.userExpanded,
                         canExpand: true,
                         selection: usersSelection,
+                        enabled: true,
                         onToggle: { selectAllHomeFolders($0) }
                     )
 
@@ -126,6 +128,25 @@ struct TransferSelectionView: View {
                         }
                     }
                 }
+
+                comingSoonRow(
+                    title: "Services",
+                    systemImage: "app.dashed",
+                    detail: "Mail, Safari, and other apps",
+                    isExpanded: $sizes.servicesExpanded
+                )
+                comingSoonRow(
+                    title: "Dock",
+                    systemImage: "dock.rectangle",
+                    detail: "Dock layout and items",
+                    isExpanded: $sizes.dockExpanded
+                )
+                comingSoonRow(
+                    title: "Finder",
+                    systemImage: "folder",
+                    detail: "Finder preferences",
+                    isExpanded: $sizes.finderExpanded
+                )
             }
             .padding(.vertical, 6)
         }
@@ -143,11 +164,12 @@ struct TransferSelectionView: View {
         return TransferTreeRow(
             title: node.name,
             systemImage: node.systemImage,
-            bytes: sizes.bytes(for: path),
+            trailing: sizeLabel(for: path),
             depth: 2,
             isExpanded: .constant(false),
             canExpand: false,
             selection: selected ? .on : .off,
+            enabled: true,
             onToggle: { model.setFolderSelected($0, url: node.url) }
         )
         .contextMenu {
@@ -157,6 +179,34 @@ struct TransferSelectionView: View {
             }
         }
         .onAppear { sizes.estimate(paths: [path]) }
+    }
+
+    private func comingSoonRow(
+        title: String,
+        systemImage: String,
+        detail: String,
+        isExpanded: Binding<Bool>
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 0) {
+            TransferTreeRow(
+                title: title,
+                systemImage: systemImage,
+                trailing: "Coming soon",
+                depth: 0,
+                isExpanded: isExpanded,
+                canExpand: true,
+                selection: .off,
+                enabled: false,
+                onToggle: { _ in }
+            )
+            if isExpanded.wrappedValue {
+                Text(detail)
+                    .font(.caption)
+                    .foregroundStyle(.tertiary)
+                    .padding(.leading, 54)
+                    .padding(.bottom, 6)
+            }
+        }
     }
 
     private var footer: some View {
@@ -216,19 +266,19 @@ struct TransferSelectionView: View {
 
     private func selectAllHomeFolders(_ selected: Bool) {
         if selected {
-            // Sandbox grants are per-folder — don’t fire a stack of open panels.
-            // Selecting the parent means “pick the common set” one at a time for unchecked convenience folders.
-            let convenience = ["Documents", "Desktop", "Downloads"]
-            for node in folderNodes where convenience.contains(node.name) {
-                if !model.isFolderSelected(path: node.url.path) {
-                    model.setFolderSelected(true, url: node.url)
-                }
+            for node in folderNodes where !model.isFolderSelected(path: node.url.path) {
+                model.setFolderSelected(true, url: node.url)
             }
         } else {
             for entry in model.folderBookmarks {
                 model.removeFolder(entry.id)
             }
         }
+    }
+
+    private func sizeLabel(for path: String) -> String {
+        guard let bytes = sizes.bytes(for: path) else { return "—" }
+        return ByteCountFormatter.string(fromByteCount: Int64(bytes), countStyle: .file)
     }
 }
 
@@ -241,11 +291,12 @@ private enum RowSelection {
 private struct TransferTreeRow: View {
     var title: String
     var systemImage: String
-    var bytes: UInt64?
+    var trailing: String
     var depth: Int
     @Binding var isExpanded: Bool
     var canExpand: Bool
     var selection: RowSelection
+    var enabled: Bool
     var onToggle: (Bool) -> Void
 
     var body: some View {
@@ -267,32 +318,23 @@ private struct TransferTreeRow: View {
                 Color.clear.frame(width: 12, height: 12)
             }
 
-            Button {
-                switch selection {
-                case .on: onToggle(false)
-                case .off, .mixed: onToggle(true)
-                }
-            } label: {
-                Image(systemName: checkboxSymbol)
-                    .font(.body)
-                    .foregroundStyle(selection == .off ? Color.secondary : Color.accentColor)
-                    .frame(width: 16, height: 16)
-            }
-            .buttonStyle(.plain)
-            .accessibilityLabel(title)
-            .accessibilityValue(selection == .on ? "selected" : selection == .mixed ? "partially selected" : "not selected")
-            .accessibilityAddTraits(.isButton)
+            Image(systemName: checkboxSymbol)
+                .font(.body)
+                .foregroundStyle(checkboxColor)
+                .frame(width: 16, height: 16)
+                .accessibilityHidden(true)
 
             Image(systemName: systemImage)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(enabled ? .secondary : .tertiary)
                 .frame(width: 18)
 
             Text(title)
+                .foregroundStyle(enabled ? Color.primary : Color.secondary)
                 .lineLimit(1)
 
             Spacer(minLength: 8)
 
-            Text(sizeLabel)
+            Text(trailing)
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .monospacedDigit()
@@ -300,6 +342,25 @@ private struct TransferTreeRow: View {
         .padding(.horizontal, 10)
         .padding(.vertical, 4)
         .contentShape(Rectangle())
+        .opacity(enabled ? 1 : 0.75)
+        .onTapGesture {
+            guard enabled else { return }
+            switch selection {
+            case .on: onToggle(false)
+            case .off, .mixed: onToggle(true)
+            }
+        }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(title)
+        .accessibilityValue(accessibilityValue)
+        .accessibilityAddTraits(enabled ? .isButton : [])
+        .accessibilityAction {
+            guard enabled else { return }
+            switch selection {
+            case .on: onToggle(false)
+            case .off, .mixed: onToggle(true)
+            }
+        }
     }
 
     private var checkboxSymbol: String {
@@ -310,9 +371,18 @@ private struct TransferTreeRow: View {
         }
     }
 
-    private var sizeLabel: String {
-        guard let bytes else { return "—" }
-        return ByteCountFormatter.string(fromByteCount: Int64(bytes), countStyle: .file)
+    private var checkboxColor: Color {
+        if !enabled { return Color(nsColor: .tertiaryLabelColor) }
+        return selection == .off ? Color.secondary : Color.accentColor
+    }
+
+    private var accessibilityValue: String {
+        if !enabled { return "coming soon" }
+        switch selection {
+        case .on: return "selected"
+        case .mixed: return "partially selected"
+        case .off: return "not selected"
+        }
     }
 }
 
@@ -324,38 +394,21 @@ struct TransferNode: Identifiable, Hashable {
     var name: String
     var systemImage: String
 
-    /// Top-level home folders. Library is listed but not a deep picker.
+    /// User-facing home folders only — never Library, SystemData, tmp, or other junk.
+    static let allowedNames = [
+        "Desktop", "Documents", "Downloads", "Pictures", "Movies", "Music", "Public",
+    ]
+
     static func homeFolders(of home: URL) -> [TransferNode] {
-        let preferred = [
-            "Documents", "Desktop", "Downloads", "Pictures", "Movies", "Music", "Public",
-        ]
         let fm = FileManager.default
-        guard let urls = try? fm.contentsOfDirectory(
-            at: home,
-            includingPropertiesForKeys: [.isDirectoryKey],
-            options: [.skipsHiddenFiles]
-        ) else {
-            return preferred.compactMap { name in
-                let url = home.appendingPathComponent(name, isDirectory: true)
-                var isDir: ObjCBool = false
-                guard fm.fileExists(atPath: url.path, isDirectory: &isDir), isDir.boolValue else { return nil }
-                return TransferNode(url: url, name: name, systemImage: symbol(for: name))
+        return allowedNames.compactMap { name in
+            let url = home.appendingPathComponent(name, isDirectory: true)
+            var isDir: ObjCBool = false
+            if fm.fileExists(atPath: url.path, isDirectory: &isDir) {
+                guard isDir.boolValue else { return nil }
             }
-        }
-
-        let directories = urls.compactMap { url -> TransferNode? in
-            let values = try? url.resourceValues(forKeys: [.isDirectoryKey])
-            guard values?.isDirectory == true else { return nil }
-            let name = url.lastPathComponent
-            // Skip deep Library browsing; still allow selecting Library as a whole (with warning).
+            // Still list the standard folder when sandbox obscures existence checks.
             return TransferNode(url: url, name: name, systemImage: symbol(for: name))
-        }
-
-        return directories.sorted { a, b in
-            let ai = preferred.firstIndex(of: a.name) ?? Int.max
-            let bi = preferred.firstIndex(of: b.name) ?? Int.max
-            if ai != bi { return ai < bi }
-            return a.name.localizedCaseInsensitiveCompare(b.name) == .orderedAscending
         }
     }
 
@@ -368,8 +421,6 @@ struct TransferNode: Identifiable, Hashable {
         case "Movies": return "film.fill"
         case "Music": return "music.note"
         case "Public": return "folder.fill.badge.person.crop"
-        case "Library": return "books.vertical.fill"
-        case "Applications": return "square.grid.2x2.fill"
         default: return "folder.fill"
         }
     }
@@ -383,6 +434,9 @@ final class FolderSizeStore: ObservableObject {
     @Published private(set) var volumeFreeBytes: UInt64?
     @Published var usersExpanded = true
     @Published var userExpanded = true
+    @Published var servicesExpanded = false
+    @Published var dockExpanded = false
+    @Published var finderExpanded = false
 
     private var inFlight = Set<String>()
 
@@ -428,7 +482,6 @@ final class FolderSizeStore: ObservableObject {
             options: [.skipsHiddenFiles, .skipsPackageDescendants]
         ) else { return 0 }
 
-        // Cap work so the picker stays responsive in sandbox / large trees.
         var visited = 0
         let limit = 8_000
         while let item = enumerator.nextObject() as? URL {

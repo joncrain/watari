@@ -93,15 +93,16 @@ final class AppModel: ObservableObject {
         folderBookmarks.contains { $0.path == path }
     }
 
-    /// Toggle a home-folder (or other) path into the job. Selecting prompts for sandbox access.
+    /// Toggle a standard home folder into the job. Checkbox UX only — no per-folder open panel.
     func setFolderSelected(_ selected: Bool, url: URL) {
         if selected {
             if isFolderSelected(path: url.path) { return }
-            guard let picked = bookmarkStore.pickFolder(
-                startingAt: url,
-                message: "Allow Watari to read “\(url.lastPathComponent)” for this transfer."
-            ) else { return }
-            ingestFolder(picked)
+            do {
+                let entry = try bookmarkStore.bookmarkHomeFolder(url)
+                ingestEntry(entry)
+            } catch {
+                lastError = error.localizedDescription
+            }
         } else if let entry = folderBookmarks.first(where: { $0.path == url.path }) {
             removeFolder(entry.id)
         }
@@ -121,24 +122,28 @@ final class AppModel: ObservableObject {
     private func ingestFolder(_ url: URL) {
         do {
             let entry = try bookmarkStore.save(url: url)
-            if folderBookmarks.contains(where: { $0.path == entry.path }) {
-                statusMessage = "\(entry.displayName) is already in this job."
-                return
-            }
-            folderBookmarks.append(entry)
-            libraryWarning = Denylist().warningForSelectingLibraryRoot(url.path)
-            previewSummary = nil
-            peerDestinations = [:]
-            peerInventoryAvailable = false
-            if selectedPeerID == nil {
-                phase = .waitingForPeer
-                statusMessage = "Folder added. Connect a peer to continue."
-            } else {
-                phase = .waitingForPeer
-                statusMessage = "Run Preview to see what will copy."
-            }
+            ingestEntry(entry)
         } catch {
             lastError = error.localizedDescription
+        }
+    }
+
+    private func ingestEntry(_ entry: BookmarkEntry) {
+        if folderBookmarks.contains(where: { $0.path == entry.path }) {
+            statusMessage = "\(entry.displayName) is already in this job."
+            return
+        }
+        folderBookmarks.append(entry)
+        libraryWarning = Denylist().warningForSelectingLibraryRoot(entry.path)
+        previewSummary = nil
+        peerDestinations = [:]
+        peerInventoryAvailable = false
+        if selectedPeerID == nil {
+            phase = .waitingForPeer
+            statusMessage = "Folder selected. Connect a peer to continue."
+        } else {
+            phase = .waitingForPeer
+            statusMessage = "Run Preview to see what will copy."
         }
     }
 
