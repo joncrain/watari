@@ -206,6 +206,9 @@ final class AppModel: ObservableObject {
         peerDockApps = catalog.dockApps
         selectedOfferNames = selectedOfferNames.intersection(Set(catalog.roots.map(\.name)))
         phase = .browsingOffers
+        modelLog.info(
+            "Received catalog from \(catalog.displayName, privacy: .public): \(catalog.roots.count, privacy: .public) root(s) [\(catalog.roots.map(\.name).joined(separator: ", "), privacy: .public)], dockApps=\(catalog.dockApps.count, privacy: .public)"
+        )
         if catalog.roots.isEmpty {
             statusMessage = "\(catalog.displayName) isn’t offering folders yet. On that Mac, enable Listen and offer folders in Settings."
         } else {
@@ -237,12 +240,29 @@ final class AppModel: ObservableObject {
 
     // MARK: - Source: offer folders on this Mac
 
-    /// Ensure default whitelist folders are offered (no open panel).
+    /// Ensure default whitelist folders that exist are offered (no open panel).
+    /// Re-runs safely: restores any removed defaults and repairs whitelist
+    /// entries that were incorrectly stored as security-scoped bookmarks.
     func bootstrapOfferedWhitelist() {
         let home = bookmarkStore.homeDirectory
         for name in TransferNode.allowedNames {
             let url = home.appendingPathComponent(name, isDirectory: true)
-            if offeredFolders.contains(where: { $0.path == url.path }) { continue }
+            if let idx = offeredFolders.firstIndex(where: { $0.path == url.path }) {
+                // Repair: whitelist must use home-relative exception access.
+                if offeredFolders[idx].access != .homeRelativeException {
+                    modelLog.info("Repairing whitelist access for \(name, privacy: .public)")
+                    if let repaired = try? bookmarkStore.bookmarkWhitelistedFolder(url) {
+                        offeredFolders[idx] = BookmarkEntry(
+                            id: offeredFolders[idx].id,
+                            displayName: repaired.displayName,
+                            path: repaired.path,
+                            bookmarkData: repaired.bookmarkData,
+                            access: .homeRelativeException
+                        )
+                    }
+                }
+                continue
+            }
             do {
                 let entry = try bookmarkStore.bookmarkWhitelistedFolder(url)
                 offeredFolders.append(entry)
@@ -250,7 +270,16 @@ final class AppModel: ObservableObject {
                 modelLog.info("Skip offering \(name, privacy: .public): \(error.localizedDescription, privacy: .public)")
             }
         }
+        // Stable order: whitelist names first, then custom Add folder entries.
+        let rank = Dictionary(uniqueKeysWithValues: TransferNode.allowedNames.enumerated().map { ($1, $0) })
+        offeredFolders.sort { a, b in
+            let ra = rank[a.displayName] ?? 1_000
+            let rb = rank[b.displayName] ?? 1_000
+            if ra != rb { return ra < rb }
+            return a.displayName.localizedCaseInsensitiveCompare(b.displayName) == .orderedAscending
+        }
         reindexOfferedFolders()
+        modelLog.info("Offering \(self.offeredFolders.count, privacy: .public) folder(s): \(self.offeredFolders.map(\.displayName).joined(separator: ", "), privacy: .public)")
     }
 
     /// Settings escape hatch: offer an extra folder from this Mac (source role).
@@ -578,6 +607,9 @@ final class AppModel: ObservableObject {
 
         guard network.listenEnabled else { return }
 
+        // Always restore default whitelist folders that exist before advertising.
+        bootstrapOfferedWhitelist()
+
         var receiveURL: URL?
         if let receive = receiveFolder {
             do {
@@ -605,23 +637,45 @@ final class AppModel: ObservableObject {
                 offeredRoots[access.entry.displayName] = access.url
                 catalogRoots.append((access.entry.displayName, access.entry.path))
             } catch {
-                modelLog.error("Offer root unavailable \(folder.path, privacy: .public): \(error.localizedDescription, privacy: .public)")
+                // Still advertise existing whitelist paths so the destination
+                // catalog isn’t silently reduced to a single readable folder.
+                let url = URL(fileURLWithPath: folder.path, isDirectory: true)
+                var isDir: ObjCBool = false
+                if FileManager.default.fileExists(atPath: url.path, isDirectory: &isDir), isDir.boolValue,
+                   BookmarkStore.whitelistedHomeFolderNames.contains(folder.displayName) {
+                    modelLog.error(
+                        "Offer root access weak \(folder.path, privacy: .public): \(error.localizedDescription, privacy: .public) — still cataloging"
+                    )
+                    offeredRoots[folder.displayName] = url
+                    catalogRoots.append((folder.displayName, folder.path))
+                } else {
+                    modelLog.error("Offer root unavailable \(folder.path, privacy: .public): \(error.localizedDescription, privacy: .public)")
+                }
             }
         }
 
+        let dockApps = DockReader.currentApps()
         let catalog = OfferCatalogResponsePayload(
             displayName: Host.current().localizedName ?? "Watari Mac",
             roots: SourceOffer.catalog(displayRoots: catalogRoots, index: fileIndex),
-            dockApps: DockReader.currentApps()
+            dockApps: dockApps
+        )
+        modelLog.info(
+            "Listen catalog: \(catalog.roots.count, privacy: .public) root(s) [\(catalog.roots.map(\.name).joined(separator: ", "), privacy: .public)], dockApps=\(dockApps.count, privacy: .public)"
         )
         let catalogRootsCopy = catalogRoots
         let fileIndexSnapshot = fileIndex
         let catalogProvider: @Sendable () -> OfferCatalogResponsePayload = {
-            OfferCatalogResponsePayload(
+            let liveDock = DockReader.currentApps()
+            let payload = OfferCatalogResponsePayload(
                 displayName: Host.current().localizedName ?? "Watari Mac",
                 roots: SourceOffer.catalog(displayRoots: catalogRootsCopy, index: fileIndexSnapshot),
-                dockApps: DockReader.currentApps()
+                dockApps: liveDock
             )
+            modelLog.info(
+                "Serve catalog: \(payload.roots.count, privacy: .public) root(s), dockApps=\(liveDock.count, privacy: .public)"
+            )
+            return payload
         }
 
         guard receiveURL != nil || !offeredRoots.isEmpty else { return }

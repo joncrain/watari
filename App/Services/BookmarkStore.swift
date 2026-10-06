@@ -69,8 +69,14 @@ final class BookmarkStore: @unchecked Sendable {
         pickFolder(startingAt: target.url)
     }
 
-    /// Bookmark a standard whitelist home folder without an open panel.
-    /// Uses home-relative temporary-exception access; does not prompt.
+    /// Offer a standard whitelist home folder without an open panel.
+    ///
+    /// Always uses `.homeRelativeException` (never a security-scoped bookmark).
+    /// Creating `withSecurityScope` bookmarks without a user open-panel grant
+    /// can “succeed” at bootstrap, then fail later in
+    /// `startAccessingSecurityScopedResource()` — which dropped Desktop /
+    /// Downloads / etc. from the offer catalog and left only Documents when
+    /// TCC happened to allow that one path.
     func bookmarkWhitelistedFolder(_ url: URL) throws -> BookmarkEntry {
         let target = url.standardizedFileURL
         let name = target.lastPathComponent
@@ -84,25 +90,21 @@ final class BookmarkStore: @unchecked Sendable {
             throw BookmarkError.missingFolder(name)
         }
 
-        // Probe readability under temporary exception before accepting the selection.
+        // Soft probe — existence is enough to offer; listing may still work via
+        // the home-relative temporary exception when Listen serves the catalog.
         do {
             _ = try FileManager.default.contentsOfDirectory(
                 at: target,
                 includingPropertiesForKeys: [.isDirectoryKey],
                 options: [.skipsHiddenFiles]
             )
+            log.info("Whitelist offer \(name, privacy: .public) via home-relative temporary exception")
         } catch {
-            log.error("Whitelist folder unreadable \(target.path, privacy: .public): \(error.localizedDescription, privacy: .public)")
-            throw BookmarkError.accessDenied(target.path)
+            log.info(
+                "Whitelist offer \(name, privacy: .public) (exists; list probe: \(error.localizedDescription, privacy: .public))"
+            )
         }
 
-        // Prefer a real security-scoped bookmark when the system allows it.
-        if let scoped = try? makeVerifiedSecurityScopedEntry(for: target) {
-            log.info("Selected \(name, privacy: .public) via security-scoped bookmark")
-            return scoped
-        }
-
-        log.info("Selected \(name, privacy: .public) via home-relative temporary exception (no open panel)")
         return BookmarkEntry(
             id: UUID().uuidString,
             displayName: name,
@@ -176,7 +178,9 @@ final class BookmarkStore: @unchecked Sendable {
             guard FileManager.default.fileExists(atPath: url.path, isDirectory: &isDir), isDir.boolValue else {
                 throw BookmarkError.missingFolder(entry.displayName)
             }
-            // Confirm the temporary exception still grants listing.
+            // Prefer confirming list access, but still return the URL when the
+            // folder exists — temporary-exception reads may succeed on later
+            // FileScanner even if this soft probe is noisy under TCC.
             do {
                 _ = try FileManager.default.contentsOfDirectory(
                     at: url,
@@ -184,8 +188,9 @@ final class BookmarkStore: @unchecked Sendable {
                     options: [.skipsHiddenFiles]
                 )
             } catch {
-                log.error("Exception access failed for \(url.path, privacy: .public): \(error.localizedDescription, privacy: .public)")
-                throw BookmarkError.accessDenied(url.path)
+                log.info(
+                    "Exception list probe for \(url.path, privacy: .public): \(error.localizedDescription, privacy: .public) — offering anyway"
+                )
             }
             return url
         case .securityScoped:

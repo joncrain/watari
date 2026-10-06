@@ -51,5 +51,9 @@ targets:
           - "/Movies/"
           - "/Music/"
           - "/Public/"
+        com.apple.security.temporary-exception.files.home-relative-path.read-only:
+          - "/Library/Preferences/com.apple.dock.plist"
+        com.apple.security.temporary-exception.shared-preference.read-only:
+          - "com.apple.dock"
         com.apple.security.network.client: true
         com.apple.security.network.server: true

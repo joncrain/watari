@@ -1,6 +1,9 @@
 import Foundation
 import Network
 import WatariCore
+import os.log
+
+private let transferLog = Logger(subsystem: "app.watari.mac", category: "TransferSession")
 
 enum TransferSessionError: LocalizedError {
     case peerGone
@@ -308,6 +311,9 @@ final class TransferSession: @unchecked Sendable {
         switch frame.type {
         case .offerCatalogRequest:
             let catalog = offerCatalogProvider?() ?? offerCatalog
+            transferLog.info(
+                "Sending offer catalog: \(catalog.roots.count, privacy: .public) root(s), dockApps=\(catalog.dockApps.count, privacy: .public)"
+            )
             try await send(
                 try TransferCodec.encodeJSON(.offerCatalogResponse, catalog),
                 on: connection

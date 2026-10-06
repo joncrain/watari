@@ -18,6 +18,15 @@
 		<string>/Music/</string>
 		<string>/Public/</string>
 	</array>
+	<!-- Dock live preview: read source Dock layout while Listen is on. -->
+	<key>com.apple.security.temporary-exception.files.home-relative-path.read-only</key>
+	<array>
+		<string>/Library/Preferences/com.apple.dock.plist</string>
+	</array>
+	<key>com.apple.security.temporary-exception.shared-preference.read-only</key>
+	<array>
+		<string>com.apple.dock</string>
+	</array>
 	<key>com.apple.security.network.client</key>
 	<true/>
 	<key>com.apple.security.network.server</key>
