@@ -40,9 +40,9 @@ Not Migration Assistant. Not cloud sync. A calm, first-party-feeling Mac utility
 
 - One-way copy of selected folder trees to a paired peer.
 - **Source prep:** with Listen on, the main window shows the offer catalog and **Add folder…** (destination only chooses what to pull).
-- **Destination transfer:** first screen is Connect/pull; after Connect, select offered folders. **Under-home** offers mirror into the destination home; **custom Add folder** paths outside the source home keep their **full absolute path**. **Start** pulls (no Preview control). Then a **transfer complete** summary. Source Mac emphasizes Prepare/offer when a peer connects inbound.
+- **Destination transfer:** first screen is Connect/pull; after Connect, select offered folders **and** Services. **Under-home** offers mirror into the destination home; **custom Add folder** paths outside the source home keep their **full absolute path**. One **Start** runs the whole plan (folders and/or Dock). Then a **transfer complete** summary. Source Mac emphasizes Prepare/offer when a peer connects inbound.
 - Internal `PreviewDiff` still decides copy/update/skip during Start; not a user-facing Preview step.
-- **Dock POC:** source includes Dock layout in the offer catalog; destination shows a live miniature Dock strip in Services (apply later).
+- **Dock:** source includes Dock layout in the offer catalog; destination Services checkbox includes it in Start (Genkan-style apply to `com.apple.dock`).
 - Permission policy: remap owner to receiving user by default; keep mode; ACL/xattr rules; strip quarantine by default.
 - Built-in denylist: keychains, TCC database, configuration profiles.
 - Connect via Nearby device list (Bonjour) when discovery allows, or hostname / FQDN / IP + port; TLS with pinned peer keys after pairing.

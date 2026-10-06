@@ -72,7 +72,7 @@ struct TransferSelectionView: View {
                 VStack(alignment: .leading, spacing: 8) {
                     Text("Services")
                         .font(.headline)
-                    Text("App data and settings. Dock shows a live miniature of the source Mac when connected.")
+                    Text("Checked items run with Start — same transfer plan as folders.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
 
@@ -187,18 +187,20 @@ struct TransferSelectionView: View {
     }
 
     private var dockServiceRow: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        let enabled = !model.peerDockApps.isEmpty
+        return VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 8) {
-                Image(systemName: "checkmark.square.fill")
+                Image(systemName: dockCheckboxSymbol)
                     .font(.body)
-                    .foregroundStyle(Color.accentColor)
+                    .foregroundStyle(dockCheckboxColor)
                     .frame(width: 16, height: 16)
                     .accessibilityHidden(true)
                 Image(systemName: "dock.rectangle")
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(enabled ? .secondary : .tertiary)
                     .frame(width: 18)
                 VStack(alignment: .leading, spacing: 1) {
                     Text("Dock")
+                        .foregroundStyle(enabled ? Color.primary : Color.secondary)
                     Text(dockDetail)
                         .font(.caption)
                         .foregroundStyle(.secondary)
@@ -208,6 +210,15 @@ struct TransferSelectionView: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
+            .contentShape(Rectangle())
+            .onTapGesture {
+                guard enabled else { return }
+                model.setDockTransferSelected(!model.selectedDockTransfer)
+            }
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel("Dock")
+            .accessibilityValue(dockAccessibilityValue)
+            .accessibilityAddTraits(enabled ? .isButton : [])
 
             DockPreviewView(
                 apps: model.peerDockApps,
@@ -217,17 +228,35 @@ struct TransferSelectionView: View {
                     : "Source isn’t sending Dock layout yet"
             )
             .padding(.leading, 44)
+            .opacity(model.selectedDockTransfer && enabled ? 1 : 0.55)
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 8)
-        .accessibilityElement(children: .contain)
     }
 
     private var dockDetail: String {
         if model.peerDockApps.isEmpty {
             return "Source Dock layout (when connected)"
         }
-        return "\(model.peerDockApps.count) apps from source — preview only"
+        if model.selectedDockTransfer {
+            return "\(model.peerDockApps.count) apps — included in Start"
+        }
+        return "\(model.peerDockApps.count) apps — not selected"
+    }
+
+    private var dockCheckboxSymbol: String {
+        if model.peerDockApps.isEmpty { return "square" }
+        return model.selectedDockTransfer ? "checkmark.square.fill" : "square"
+    }
+
+    private var dockCheckboxColor: Color {
+        if model.peerDockApps.isEmpty { return Color(nsColor: .tertiaryLabelColor) }
+        return model.selectedDockTransfer ? Color.accentColor : Color.secondary
+    }
+
+    private var dockAccessibilityValue: String {
+        if model.peerDockApps.isEmpty { return "waiting for source" }
+        return model.selectedDockTransfer ? "selected for Start" : "not selected"
     }
 
     private func comingSoonRow(title: String, systemImage: String, detail: String) -> some View {
@@ -266,7 +295,16 @@ struct TransferSelectionView: View {
             }
             return "—"
         }()
-        return Text("\(selected) selected to transfer. \(available) available on this Mac.")
+        let services: String = {
+            if model.willApplyDock {
+                return " Dock included."
+            }
+            if model.selectedDockTransfer {
+                return " Dock checked (waiting on source)."
+            }
+            return ""
+        }()
+        return Text("\(selected) selected to transfer.\(services) \(available) available on this Mac.")
             .font(.caption)
             .foregroundStyle(.secondary)
     }
@@ -316,7 +354,7 @@ struct TransferSelectionView: View {
                 Button("Start") { model.start() }
                     .buttonStyle(.borderedProminent)
                     .disabled(!model.canStart)
-                    .help(model.startBlockedReason ?? "Pull selected folders to this Mac")
+                    .help(model.startBlockedReason ?? "Run the transfer plan (folders and checked Services)")
                     .keyboardShortcut(.defaultAction)
                 if model.canStop {
                     Button("Stop", role: .destructive) { model.stop() }
@@ -329,9 +367,26 @@ struct TransferSelectionView: View {
                 Text(reason)
                     .font(.caption)
                     .foregroundStyle(.orange)
+            } else {
+                Text(startHint)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
         }
         .padding(.top, 8)
+    }
+
+    private var startHint: String {
+        switch (model.selectedOfferNames.isEmpty, model.willApplyDock) {
+        case (false, true):
+            return "Start pulls selected folders and applies the source Dock."
+        case (true, true):
+            return "Start applies the source Dock (no folders selected)."
+        case (false, false):
+            return "Start pulls selected folders."
+        case (true, false):
+            return "Select folders and/or Dock, then Start."
+        }
     }
 
     @ViewBuilder

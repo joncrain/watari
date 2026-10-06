@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// Destination post-job summary — folders transferred plus a few calm stats.
+/// Destination post-job summary — folders and Services from the transfer plan.
 struct TransferCompleteView: View {
     @EnvironmentObject private var model: AppModel
     let summary: TransferCompleteSummary
@@ -18,17 +18,32 @@ struct TransferCompleteView: View {
                     .padding(.top, 6)
 
                 VStack(alignment: .leading, spacing: 14) {
-                    VStack(alignment: .leading, spacing: 6) {
-                        Text("Folders")
-                            .font(.headline)
-                        ForEach(summary.folderNames, id: \.self) { name in
-                            Label(name, systemImage: "folder.fill")
-                                .foregroundStyle(.primary)
+                    if summary.hasFolders {
+                        VStack(alignment: .leading, spacing: 6) {
+                            Text("Folders")
+                                .font(.headline)
+                            ForEach(summary.folderNames, id: \.self) { name in
+                                Label(name, systemImage: "folder.fill")
+                                    .foregroundStyle(.primary)
+                            }
                         }
-                        if summary.folderNames.isEmpty {
-                            Text("No folders recorded.")
-                                .foregroundStyle(.secondary)
+                    }
+
+                    if summary.hasServices {
+                        if summary.hasFolders { Divider() }
+                        VStack(alignment: .leading, spacing: 6) {
+                            Text("Services")
+                                .font(.headline)
+                            Label(
+                                "Dock — \(summary.dockAppCount) apps applied",
+                                systemImage: "dock.rectangle"
+                            )
                         }
+                    }
+
+                    if !summary.hasFolders && !summary.hasServices {
+                        Text("Nothing was recorded for this job.")
+                            .foregroundStyle(.secondary)
                     }
 
                     Divider()
@@ -36,9 +51,14 @@ struct TransferCompleteView: View {
                     VStack(alignment: .leading, spacing: 8) {
                         Text("Summary")
                             .font(.headline)
-                        statRow("Files transferred", "\(summary.filesTransferred)")
-                        statRow("Size", summary.bytesLabel)
+                        if summary.hasFolders {
+                            statRow("Files transferred", "\(summary.filesTransferred)")
+                            statRow("Size", summary.bytesLabel)
+                        }
                         statRow("Duration", summary.durationLabel)
+                        if summary.dockApplied {
+                            statRow("Dock apps", "\(summary.dockAppCount)")
+                        }
                         if summary.unchanged > 0 {
                             statRow("Unchanged", "\(summary.unchanged)")
                         }

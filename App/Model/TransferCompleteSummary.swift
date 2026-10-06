@@ -12,6 +12,9 @@ struct TransferCompleteSummary: Equatable {
     var permissionRemaps: Int
     var permissionNotes: Int
     var hadExceptions: Bool
+    /// Source Dock was selected and applied on this Mac.
+    var dockApplied: Bool
+    var dockAppCount: Int
 
     var durationLabel: String {
         if durationSeconds < 1 {
@@ -28,4 +31,7 @@ struct TransferCompleteSummary: Equatable {
     var bytesLabel: String {
         ByteCountFormatter.string(fromByteCount: Int64(bytesTransferred), countStyle: .file)
     }
+
+    var hasFolders: Bool { !folderNames.isEmpty }
+    var hasServices: Bool { dockApplied }
 }

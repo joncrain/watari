@@ -19,12 +19,12 @@ Native Mac tool in the spirit of first-party utilities — Migration Assistant c
 
 - **First screen (destination):** Connect / Nearby only — pull flow. “Offer folders from this Mac…” is a secondary link.
 - **Source when a peer connects inbound:** switches to **Prepare this Mac** (offer catalog + Add folder + Listen).
-- **After connect (destination):** choose folders → path mapping → Start.
-- **After Start:** calm **Transfer complete** summary (folders, files, bytes, duration, skip/unchanged, remaps).
+- **After connect (destination):** choose folders + Services → path mapping → one **Start** for the whole plan.
+- **After Start:** calm **Transfer complete** summary (folders, Services/Dock, files, bytes, duration, skip/unchanged, remaps).
 - **Toolbar:** custom sidebar/inspector toggles only — no system NavigationSplitView `>>`.
 - **Sidebar + inspector:** Hidden/collapsed by default; reveal via toolbar.
-- **Toolbar:** Connect; after peer — Start (pull) / Stop; sidebar/inspector toggles.
-- **Services:** Dock shows a live miniature of the source Mac’s Dock when connected; other services remain coming soon.
+- **Toolbar:** Connect; after peer — Start (plan) / Stop; sidebar/inspector toggles.
+- **Services:** same selection language as Folders (checkbox). Dock is live + Start-applied; other services remain coming soon.
 - **Settings:** Receive folder; Listen/port + same offer list for power users.
 - **Connect sheet:** Nearby list primary when enabled; host / port under “Connect by host / port”.
 

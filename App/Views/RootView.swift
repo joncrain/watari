@@ -39,7 +39,7 @@ struct RootView: View {
                 if model.selectedPeerID != nil, model.phase != .transferComplete, !model.shouldShowSourcePrep {
                     Button("Start", systemImage: "play.fill") { model.start() }
                         .disabled(!model.canStart)
-                        .help(model.startBlockedReason ?? "Pull selected folders to this Mac")
+                        .help(model.startBlockedReason ?? "Run the transfer plan (folders and checked Services)")
                     if model.canStop {
                         Button("Stop", systemImage: "stop.fill") { model.stop() }
                             .help("Stop transfer")

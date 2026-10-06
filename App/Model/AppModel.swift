@@ -33,6 +33,8 @@ final class AppModel: ObservableObject {
     @Published var peerOfferDisplayName: String = ""
     /// Source Mac Dock layout from the offer catalog (live preview).
     @Published var peerDockApps: [DockAppOffer] = []
+    /// Include source Dock in the unified Start transfer plan.
+    @Published var selectedDockTransfer = false
     /// Display names selected from `peerOffers` to pull.
     @Published var selectedOfferNames: Set<String> = []
     @Published var previewSummary: PreviewSummary?
@@ -87,12 +89,17 @@ final class AppModel: ObservableObject {
             .appendingPathComponent("local-index.json")
     }()
 
-    /// Start pulls selected folders. `PreviewDiff` still runs inside the transfer pipeline.
+    /// True when Dock is checked and the source sent a layout.
+    var willApplyDock: Bool {
+        selectedDockTransfer && !peerDockApps.isEmpty
+    }
+
+    /// Start runs the whole transfer plan: selected folders and/or checked Services.
     var canStart: Bool {
         selectedPeerID != nil
-            && !selectedOfferNames.isEmpty
             && phase != .copying
             && phase != .needsConnect
+            && (!selectedOfferNames.isEmpty || willApplyDock)
     }
 
     var canStop: Bool { phase == .copying }
@@ -104,8 +111,17 @@ final class AppModel: ObservableObject {
         if canStart { return nil }
         if phase == .copying { return "Transfer in progress." }
         if selectedPeerID == nil || phase == .needsConnect { return "Connect to a source Mac first." }
-        if selectedOfferNames.isEmpty { return "Select at least one folder to transfer." }
+        if selectedOfferNames.isEmpty && !willApplyDock {
+            if selectedDockTransfer && peerDockApps.isEmpty {
+                return "Dock is checked but the source hasn’t sent a Dock layout yet."
+            }
+            return "Select at least one folder or Service (Dock) to transfer."
+        }
         return nil
+    }
+
+    func setDockTransferSelected(_ selected: Bool) {
+        selectedDockTransfer = selected
     }
 
     var usesHomeReceiveMapping: Bool { receiveFolder == nil }
@@ -206,14 +222,20 @@ final class AppModel: ObservableObject {
         peerOfferDisplayName = catalog.displayName
         peerDockApps = catalog.dockApps
         selectedOfferNames = selectedOfferNames.intersection(Set(catalog.roots.map(\.name)))
+        // Default Dock into the transfer plan when the source sends a layout.
+        if !catalog.dockApps.isEmpty {
+            selectedDockTransfer = true
+        } else {
+            selectedDockTransfer = false
+        }
         phase = .browsingOffers
         modelLog.info(
             "Received catalog from \(catalog.displayName, privacy: .public): \(catalog.roots.count, privacy: .public) root(s) [\(catalog.roots.map(\.name).joined(separator: ", "), privacy: .public)], dockApps=\(catalog.dockApps.count, privacy: .public)"
         )
-        if catalog.roots.isEmpty {
-            statusMessage = "\(catalog.displayName) isn’t offering folders yet. On that Mac, enable Listen and offer folders in Settings."
+        if catalog.roots.isEmpty && catalog.dockApps.isEmpty {
+            statusMessage = "\(catalog.displayName) isn’t offering folders or Dock yet. On that Mac, enable Listen."
         } else {
-            statusMessage = "Connected to \(catalog.displayName). Choose folders to transfer here."
+            statusMessage = "Connected to \(catalog.displayName). Choose folders and Services, then Start."
         }
     }
 
@@ -452,15 +474,15 @@ final class AppModel: ObservableObject {
     func dismissTransferSummary(keepPeer: Bool = false) {
         lastTransferSummary = nil
         progressFraction = 0
-        peerDockApps = []
         if keepPeer, selectedPeerID != nil {
             phase = .browsingOffers
-            statusMessage = "Choose folders to transfer."
+            statusMessage = "Choose folders and Services, then Start."
         } else {
             selectedPeerID = nil
             selectedOfferNames = []
             peerOffers = []
             peerDockApps = []
+            selectedDockTransfer = false
             phase = .needsConnect
             statusMessage = "Connect to another Mac to choose what to transfer."
         }
@@ -472,17 +494,31 @@ final class AppModel: ObservableObject {
             return
         }
         let rootNames = Array(selectedOfferNames).sorted()
-        let destinationRoots = effectiveDestinationRoots()
-        guard !destinationRoots.isEmpty else {
+        let applyDock = willApplyDock
+        let dockApps = peerDockApps
+        let destinationRoots = rootNames.isEmpty ? [:] : effectiveDestinationRoots()
+        if !rootNames.isEmpty, destinationRoots.isEmpty {
             lastError = "No destination folders to receive into."
             return
         }
-        if !policy.remapOwnerToReceivingUser {
+        if applyDock, dockApps.isEmpty {
+            lastError = DockApplyError.emptyLayout.localizedDescription
+            return
+        }
+
+        phase = .copying
+        progressFraction = 0
+        if rootNames.isEmpty, applyDock {
+            statusMessage = "Applying Dock from \(peer.displayName)…"
+        } else if applyDock {
+            statusMessage = "Pulling folders and applying Dock from \(peer.displayName)…"
+        } else {
+            statusMessage = "Pulling from \(peer.displayName)…"
+        }
+        if !policy.remapOwnerToReceivingUser, !rootNames.isEmpty {
             statusMessage = "Pulling with source ownership preserved (advanced)."
         }
-        phase = .copying
-        statusMessage = "Pulling from \(peer.displayName)…"
-        progressFraction = 0
+
         let conflictPolicy = conflict
         let permissionPolicy = policy
         let overrideEntry = receiveFolder
@@ -492,46 +528,66 @@ final class AppModel: ObservableObject {
         let peerName = peer.displayName
         Task {
             do {
-                var overrideAccessURL: URL?
-                if let overrideEntry {
-                    let access = try bookmarkStore.startAccessRefreshing(overrideEntry)
-                    overrideAccessURL = access.url
-                    if access.didRefresh {
-                        await MainActor.run { self.receiveFolder = access.entry }
-                    }
-                }
-                defer {
-                    if let overrideAccessURL {
-                        bookmarkStore.stopAccess(to: overrideAccessURL)
-                    }
-                }
                 let receivedBox = ReceivedBox()
-                try await transfer.pull(
-                    rootNames: rootNames,
-                    peer: peer,
-                    policy: permissionPolicy,
-                    conflict: conflictPolicy,
-                    destinationRoots: destinationRoots,
-                    connector: peerConnector,
-                    applier: permissionApplier,
-                    onIndexUpdate: { [weak self] received in
-                        receivedBox.items = received
-                        Task { @MainActor in
-                            guard let self else { return }
-                            ReceiveIndex.upsert(
-                                &self.fileIndex,
-                                destinationRootPath: indexRootPath,
-                                received: received
-                            )
-                            self.persistIndex()
+                if !rootNames.isEmpty {
+                    var overrideAccessURL: URL?
+                    if let overrideEntry {
+                        let access = try bookmarkStore.startAccessRefreshing(overrideEntry)
+                        overrideAccessURL = access.url
+                        if access.didRefresh {
+                            await MainActor.run { self.receiveFolder = access.entry }
                         }
                     }
-                ) { @Sendable [weak self] fraction, message in
-                    Task { @MainActor in
-                        self?.progressFraction = fraction
-                        if let message { self?.statusMessage = message }
+                    defer {
+                        if let overrideAccessURL {
+                            bookmarkStore.stopAccess(to: overrideAccessURL)
+                        }
+                    }
+                    try await transfer.pull(
+                        rootNames: rootNames,
+                        peer: peer,
+                        policy: permissionPolicy,
+                        conflict: conflictPolicy,
+                        destinationRoots: destinationRoots,
+                        connector: peerConnector,
+                        applier: permissionApplier,
+                        onIndexUpdate: { [weak self] received in
+                            receivedBox.items = received
+                            Task { @MainActor in
+                                guard let self else { return }
+                                ReceiveIndex.upsert(
+                                    &self.fileIndex,
+                                    destinationRootPath: indexRootPath,
+                                    received: received
+                                )
+                                self.persistIndex()
+                            }
+                        }
+                    ) { @Sendable [weak self] fraction, message in
+                        Task { @MainActor in
+                            // Leave headroom for Dock apply after the pull.
+                            let scale = applyDock ? 0.9 : 1.0
+                            self?.progressFraction = fraction * scale
+                            if let message { self?.statusMessage = message }
+                        }
                     }
                 }
+
+                var dockCount = 0
+                var dockError: String?
+                if applyDock {
+                    await MainActor.run {
+                        self.statusMessage = "Applying Dock layout…"
+                        self.progressFraction = max(self.progressFraction, 0.92)
+                    }
+                    do {
+                        dockCount = try DockApplier.apply(apps: dockApps)
+                    } catch {
+                        dockError = error.localizedDescription
+                        modelLog.error("Dock apply failed: \(error.localizedDescription, privacy: .public)")
+                    }
+                }
+
                 await MainActor.run {
                     let duration = Date().timeIntervalSince(startedAt)
                     let receivedItems = receivedBox.items
@@ -541,6 +597,7 @@ final class AppModel: ObservableObject {
                         partial + item.permissionExceptions.filter { $0.code == .ownerRemapped }.count
                     } ?? 0
                     let notes = previewSnapshot?.permissionExceptionCount ?? remaps
+                    let dockOK = applyDock && dockError == nil
                     let summary = TransferCompleteSummary(
                         peerDisplayName: peerName,
                         folderNames: rootNames,
@@ -551,14 +608,21 @@ final class AppModel: ObservableObject {
                         unchanged: previewSnapshot?.unchanged ?? 0,
                         permissionRemaps: remaps,
                         permissionNotes: notes,
-                        hadExceptions: notes > 0 || remaps > 0
+                        hadExceptions: notes > 0 || remaps > 0 || dockError != nil,
+                        dockApplied: dockOK,
+                        dockAppCount: dockOK ? dockCount : 0
                     )
                     self.lastTransferSummary = summary
                     self.phase = .transferComplete
                     self.progressFraction = 1
-                    self.statusMessage = summary.hadExceptions
-                        ? "Finished with permission notes."
-                        : "Transfer complete."
+                    if let dockError {
+                        self.lastError = "Folders finished, but Dock apply failed: \(dockError)"
+                        self.statusMessage = "Finished with Dock apply error."
+                    } else if summary.hadExceptions {
+                        self.statusMessage = "Finished with permission notes."
+                    } else {
+                        self.statusMessage = "Transfer complete."
+                    }
                 }
             } catch TransferSessionError.peerGone {
                 await MainActor.run {
