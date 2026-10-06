@@ -17,7 +17,7 @@ Native Mac tool in the spirit of first-party utilities — Migration Assistant c
 
 ## Composition
 
-- **Main (default):** Centered title (“Choose what to transfer”), short subtitle, **one bordered hierarchical list** (Users → current user → Desktop/Documents/Downloads/Pictures/Movies/Music/Public), plus sibling **Services / Dock / Finder** stubs (Coming soon). No Library / SystemData / tmp. Footer (“X selected to transfer. Y available on …”). Brand name **Watari** stays in the window title only.
+- **Main (default):** Centered title (“Choose what to transfer”), short subtitle, **Home Folder** bordered hierarchical list (Users → current user → Desktop/Documents/Downloads/Pictures/Movies/Music/Public — files only), then a **separate Services** section below with its own list (Services / Dock / Finder stubs, Coming soon). No Library / SystemData / tmp. Footer under Home Folder. Brand name **Watari** stays in the window title only.
 - **Sidebar + inspector:** `NavigationSplitView` and inspector exist but are **hidden/collapsed by default**; reveal via toolbar.
 - **Toolbar:** Preview / Start when a peer is ready; Connect otherwise; sidebar/inspector toggles. Stop only while copying.
 - **Selection:** Checkbox / row click toggles standard home folders directly (one-time home security scope if the sandbox requires it — never a per-folder open panel for these locations).

@@ -30,45 +30,63 @@ struct TransferSelectionView: View {
     }
 
     var body: some View {
-        VStack(spacing: 0) {
-            Spacer(minLength: 28)
-
-            Text("Choose what to transfer")
-                .font(.title2.weight(.semibold))
-                .multilineTextAlignment(.center)
-
-            Text(subtitle)
-                .font(.callout)
-                .foregroundStyle(.secondary)
-                .multilineTextAlignment(.center)
-                .padding(.top, 6)
-                .padding(.horizontal, 32)
-
-            if let warning = model.libraryWarning {
-                Text(warning)
-                    .font(.caption)
-                    .foregroundStyle(.orange)
+        ScrollView {
+            VStack(spacing: 0) {
+                Text("Choose what to transfer")
+                    .font(.title2.weight(.semibold))
                     .multilineTextAlignment(.center)
-                    .padding(.top, 8)
-                    .padding(.horizontal, 32)
-            }
+                    .padding(.top, 28)
 
-            borderedTree
-                .frame(maxWidth: 540)
-                .frame(minHeight: 280, maxHeight: 400)
+                Text(subtitle)
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+                    .padding(.top, 6)
+                    .padding(.horizontal, 32)
+
+                if let warning = model.libraryWarning {
+                    Text(warning)
+                        .font(.caption)
+                        .foregroundStyle(.orange)
+                        .multilineTextAlignment(.center)
+                        .padding(.top, 8)
+                        .padding(.horizontal, 32)
+                }
+
+                // Home Folder — files only
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Home Folder")
+                        .font(.headline)
+
+                    borderedFolderTree
+                        .frame(minHeight: 220, maxHeight: 320)
+
+                    footer
+                }
+                .frame(maxWidth: 540, alignment: .leading)
                 .padding(.top, 20)
                 .padding(.horizontal, 40)
 
-            footer
+                // Separate transfer section — not part of the file tree
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Services")
+                        .font(.headline)
+                    Text("App data and settings. Coming later — not part of the folder transfer.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+
+                    borderedServicesList
+                }
                 .frame(maxWidth: 540, alignment: .leading)
-                .padding(.top, 10)
+                .padding(.top, 22)
                 .padding(.horizontal, 40)
 
-            phaseChrome
-                .padding(.top, 16)
-                .padding(.horizontal, 40)
-
-            Spacer(minLength: 28)
+                phaseChrome
+                    .padding(.top, 16)
+                    .padding(.horizontal, 40)
+                    .padding(.bottom, 28)
+            }
+            .frame(maxWidth: .infinity)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .onAppear {
@@ -94,7 +112,7 @@ struct TransferSelectionView: View {
         }
     }
 
-    private var borderedTree: some View {
+    private var borderedFolderTree: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 0) {
                 TransferTreeRow(
@@ -128,28 +146,38 @@ struct TransferSelectionView: View {
                         }
                     }
                 }
-
-                comingSoonRow(
-                    title: "Services",
-                    systemImage: "app.dashed",
-                    detail: "Mail, Safari, and other apps",
-                    isExpanded: $sizes.servicesExpanded
-                )
-                comingSoonRow(
-                    title: "Dock",
-                    systemImage: "dock.rectangle",
-                    detail: "Dock layout and items",
-                    isExpanded: $sizes.dockExpanded
-                )
-                comingSoonRow(
-                    title: "Finder",
-                    systemImage: "folder",
-                    detail: "Finder preferences",
-                    isExpanded: $sizes.finderExpanded
-                )
             }
             .padding(.vertical, 6)
         }
+        .background(Color(nsColor: .textBackgroundColor))
+        .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 6, style: .continuous)
+                .strokeBorder(Color(nsColor: .separatorColor), lineWidth: 1)
+        )
+    }
+
+    private var borderedServicesList: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            comingSoonRow(
+                title: "Services",
+                systemImage: "app.dashed",
+                detail: "Mail, Safari, and other apps"
+            )
+            Divider().padding(.leading, 44)
+            comingSoonRow(
+                title: "Dock",
+                systemImage: "dock.rectangle",
+                detail: "Dock layout and items"
+            )
+            Divider().padding(.leading, 44)
+            comingSoonRow(
+                title: "Finder",
+                systemImage: "folder",
+                detail: "Finder preferences"
+            )
+        }
+        .padding(.vertical, 4)
         .background(Color(nsColor: .textBackgroundColor))
         .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
         .overlay(
@@ -184,29 +212,33 @@ struct TransferSelectionView: View {
     private func comingSoonRow(
         title: String,
         systemImage: String,
-        detail: String,
-        isExpanded: Binding<Bool>
+        detail: String
     ) -> some View {
-        VStack(alignment: .leading, spacing: 0) {
-            TransferTreeRow(
-                title: title,
-                systemImage: systemImage,
-                trailing: "Coming soon",
-                depth: 0,
-                isExpanded: isExpanded,
-                canExpand: true,
-                selection: .off,
-                enabled: false,
-                onToggle: { _ in }
-            )
-            if isExpanded.wrappedValue {
+        HStack(spacing: 8) {
+            Image(systemName: "square")
+                .font(.body)
+                .foregroundStyle(Color(nsColor: .tertiaryLabelColor))
+                .frame(width: 16, height: 16)
+            Image(systemName: systemImage)
+                .foregroundStyle(.tertiary)
+                .frame(width: 18)
+            VStack(alignment: .leading, spacing: 1) {
+                Text(title)
+                    .foregroundStyle(.secondary)
                 Text(detail)
                     .font(.caption)
                     .foregroundStyle(.tertiary)
-                    .padding(.leading, 54)
-                    .padding(.bottom, 6)
             }
+            Spacer(minLength: 8)
+            Text("Coming soon")
+                .font(.caption)
+                .foregroundStyle(.secondary)
         }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 8)
+        .opacity(0.85)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("\(title), coming soon")
     }
 
     private var footer: some View {
@@ -434,9 +466,6 @@ final class FolderSizeStore: ObservableObject {
     @Published private(set) var volumeFreeBytes: UInt64?
     @Published var usersExpanded = true
     @Published var userExpanded = true
-    @Published var servicesExpanded = false
-    @Published var dockExpanded = false
-    @Published var finderExpanded = false
 
     private var inFlight = Set<String>()
 
