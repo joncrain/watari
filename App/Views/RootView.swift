@@ -35,10 +35,10 @@ struct RootView: View {
                 if model.selectedPeerID != nil {
                     Button("Preview", systemImage: "list.bullet.rectangle") { model.preview() }
                         .disabled(!model.canPreview)
-                        .help("Preview what will copy from the source Mac")
+                        .help(model.previewBlockedReason ?? "Preview what will copy from the source Mac")
                     Button("Start", systemImage: "play.fill") { model.start() }
                         .disabled(!model.canStart)
-                        .help("Pull selected folders to this Mac")
+                        .help(model.startBlockedReason ?? "Pull selected folders to this Mac")
                     if model.canStop {
                         Button("Stop", systemImage: "stop.fill") { model.stop() }
                             .help("Stop transfer")

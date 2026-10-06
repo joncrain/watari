@@ -35,7 +35,7 @@ struct SettingsView: View {
                             format: IntegerFormatStyle<Int>().grouping(.never)
                         )
                         .onChange(of: model.network.listenPort) { _, _ in model.refreshListener() }
-                        Text("When listening, peers can see folders you offer and pull them. The first inbound Connect may show a macOS Firewall dialog (admin password) — allow Watari once. Full Disk Access does not replace that.")
+                        Text("Offer catalog and Add folder… live on the main window when Listen is on. Settings keeps Listen/port and the same list for power users. First inbound Connect may show a Firewall dialog — allow Watari once.")
                             .font(.caption)
                             .foregroundStyle(.secondary)
                         ForEach(model.offeredFolders) { folder in
@@ -53,7 +53,7 @@ struct SettingsView: View {
                                 Button("Remove", role: .destructive) { model.removeOfferedFolder(folder.id) }
                             }
                         }
-                        Button("Offer another folder…") { model.addOfferedFolder() }
+                        Button("Add folder…") { model.addOfferedFolder() }
                         Button("Reindex offered folders") {
                             model.reindexOfferedFolders()
                             model.refreshListener()

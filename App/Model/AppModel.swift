@@ -80,9 +80,42 @@ final class AppModel: ObservableObject {
             && phase != .needsConnect
     }
 
-    var canStart: Bool { phase == .previewReady && receiveFolder != nil }
+    /// Start pulls selected folders; Preview is optional but recommended.
+    var canStart: Bool {
+        selectedPeerID != nil
+            && receiveFolder != nil
+            && !selectedOfferNames.isEmpty
+            && phase != .copying
+            && phase != .needsConnect
+    }
+
     var canStop: Bool { phase == .copying }
     var exceptionCount: Int { previewSummary?.permissionExceptionCount ?? 0 }
+    var isListening: Bool { jobListener.isListening }
+
+    /// Why Preview is disabled (nil when enabled).
+    var previewBlockedReason: String? {
+        if canPreview { return nil }
+        if phase == .copying { return "Transfer in progress." }
+        if selectedPeerID == nil || phase == .needsConnect { return "Connect to a source Mac first." }
+        if selectedOfferNames.isEmpty { return "Select at least one folder to transfer." }
+        if receiveFolder == nil { return "Choose a receive folder on this Mac." }
+        return nil
+    }
+
+    /// Why Start is disabled (nil when enabled).
+    var startBlockedReason: String? {
+        if canStart { return nil }
+        if phase == .copying { return "Transfer in progress." }
+        if selectedPeerID == nil || phase == .needsConnect { return "Connect to a source Mac first." }
+        if selectedOfferNames.isEmpty { return "Select at least one folder to transfer." }
+        if receiveFolder == nil { return "Choose a receive folder on this Mac." }
+        return nil
+    }
+
+    func offeredBytes(for folder: BookmarkEntry) -> UInt64 {
+        fileIndex.totalBytes(rootPath: folder.path)
+    }
 
     var selectedPeer: PeerRecord? {
         peers.first { $0.id == selectedPeerID }
@@ -294,9 +327,7 @@ final class AppModel: ObservableObject {
 
     func preview() {
         guard canPreview, let peer = selectedPeer else {
-            if receiveFolder == nil {
-                lastError = "Choose a receive folder in Settings before Preview."
-            }
+            lastError = previewBlockedReason ?? "Can’t preview yet."
             return
         }
         statusMessage = "Asking \(peer.displayName) for file inventory…"
@@ -361,9 +392,7 @@ final class AppModel: ObservableObject {
 
     func start() {
         guard canStart, let peer = selectedPeer, let receive = receiveFolder else {
-            if receiveFolder == nil {
-                lastError = "Choose a receive folder in Settings before starting."
-            }
+            lastError = startBlockedReason ?? "Can’t start transfer yet."
             return
         }
         let rootNames = Array(selectedOfferNames).sorted()
@@ -406,7 +435,7 @@ final class AppModel: ObservableObject {
                     }
                 }
                 await MainActor.run {
-                    self.phase = (self.exceptionCount > 0) ? .finishedWithExceptions : .previewReady
+                    self.phase = (self.exceptionCount > 0) ? .finishedWithExceptions : .browsingOffers
                     self.statusMessage = self.exceptionCount > 0
                         ? "Finished with \(self.exceptionCount) permission note(s)."
                         : "Finished."
@@ -420,7 +449,7 @@ final class AppModel: ObservableObject {
             } catch {
                 await MainActor.run {
                     self.lastError = error.localizedDescription
-                    self.phase = .previewReady
+                    self.phase = .browsingOffers
                     self.statusMessage = "Stopped — \(error.localizedDescription)"
                 }
             }

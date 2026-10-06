@@ -39,6 +39,8 @@ Not Migration Assistant. Not cloud sync. A calm, first-party-feeling Mac utility
 **v1 ships**
 
 - One-way copy of selected folder trees to a paired peer.
+- **Source prep:** with Listen on, the main window shows the offer catalog and **Add folder…** (destination only chooses what to pull).
+- **Destination transfer:** after Connect, select offered folders, choose receive folder, then **Preview** (optional) and **Start**.
 - Preview: unchanged / copy / update / skip / permission exceptions.
 - Permission policy: remap owner to receiving user by default; keep mode; ACL/xattr rules; strip quarantine by default.
 - Built-in denylist: keychains, TCC database, configuration profiles.

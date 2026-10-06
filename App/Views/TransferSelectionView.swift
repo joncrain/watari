@@ -31,13 +31,6 @@ struct TransferSelectionView: View {
                     .padding(.top, 6)
                     .padding(.horizontal, 32)
 
-                if model.receiveFolder == nil {
-                    Text("Choose a receive folder in Settings before Preview or Start.")
-                        .font(.caption)
-                        .foregroundStyle(.orange)
-                        .padding(.top, 8)
-                }
-
                 if let warning = model.libraryWarning {
                     Text(warning)
                         .font(.caption)
@@ -69,6 +62,8 @@ struct TransferSelectionView: View {
                         .frame(minHeight: 200, maxHeight: 320)
 
                     footer
+
+                    receiveAndActions
                 }
                 .frame(maxWidth: 540, alignment: .leading)
                 .padding(.top, 20)
@@ -228,6 +223,54 @@ struct TransferSelectionView: View {
         return Text("\(selected) selected to transfer. \(available) available on this Mac.")
             .font(.caption)
             .foregroundStyle(.secondary)
+    }
+
+    /// Receive folder + Preview / Start — visible in the panel, not only the toolbar.
+    private var receiveAndActions: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(alignment: .firstTextBaseline) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Receive into")
+                        .font(.subheadline.weight(.medium))
+                    Text(model.receiveFolder?.path ?? "Choose where folders arrive on this Mac")
+                        .font(.caption)
+                        .foregroundStyle(model.receiveFolder == nil ? .orange : .secondary)
+                        .lineLimit(2)
+                        .truncationMode(.middle)
+                }
+                Spacer(minLength: 12)
+                Button(model.receiveFolder == nil ? "Choose…" : "Change…") {
+                    model.chooseReceiveFolder()
+                }
+            }
+
+            HStack(spacing: 12) {
+                Button("Preview") { model.preview() }
+                    .disabled(!model.canPreview)
+                    .help(model.previewBlockedReason ?? "Preview what will copy")
+                Button("Start") { model.start() }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(!model.canStart)
+                    .help(model.startBlockedReason ?? "Pull selected folders to this Mac")
+                    .keyboardShortcut(.defaultAction)
+                if model.canStop {
+                    Button("Stop", role: .destructive) { model.stop() }
+                }
+                Spacer(minLength: 0)
+            }
+            .controlSize(.large)
+
+            if let reason = model.startBlockedReason ?? model.previewBlockedReason {
+                Text(reason)
+                    .font(.caption)
+                    .foregroundStyle(.orange)
+            } else if model.phase != .previewReady && model.phase != .copying {
+                Text("Preview is optional. Start pulls the selected folders now.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .padding(.top, 8)
     }
 
     @ViewBuilder
