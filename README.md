@@ -33,6 +33,24 @@ xcodegen generate
 open Watari.xcodeproj
 ```
 
+## CI & releases
+
+- **CI** (`.github/workflows/ci.yml`): on PRs and pushes to `main`, runs `swift test` for WatariCore on Linux.
+- **Release** (`.github/workflows/release.yml`): on a `v*` tag or manual dispatch, re-runs core tests, builds the Mac app on `macos-latest` (XcodeGen + `xcodebuild`), and publishes a GitHub Release with `Watari-vX.Y.Z.zip`.
+
+### Cut a release
+
+```bash
+git tag v1.0.0
+git push origin v1.0.0
+```
+
+Or: **Actions → Release → Run workflow** → version `1.0.0` (creates tag `v1.0.0`).
+
+`CFBundleShortVersionString` / marketing version is set from the tag (minus the `v`). Build number is the workflow run number.
+
+**Signing / notarization:** not configured. Release artifacts are ad-hoc signed only; Gatekeeper will block by default. Sign and notarize with your Developer ID for real distribution (no secrets needed for these CI builds).
+
 ## Product principles
 
 1. Chosen folders only — security-scoped bookmarks, no Full Disk Access by default.

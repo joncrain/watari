@@ -1,0 +1,123 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Marketing version without v prefix (e.g. 1.0.0)"
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  test:
+    name: WatariCore (Linux)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Read Swift version
+        id: swift
+        run: echo "version=$(tr -d '[:space:]' < .swift-version)" >> "$GITHUB_OUTPUT"
+      - uses: swift-actions/setup-swift@v2
+        with:
+          swift-version: ${{ steps.swift.outputs.version }}
+      - run: swift test
+
+  build-mac:
+    name: Mac app (unsigned)
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolve version
+        id: ver
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            RAW="${{ inputs.version }}"
+          else
+            RAW="${{ github.ref_name }}"
+          fi
+          RAW="${RAW#v}"
+          echo "version=$RAW" >> "$GITHUB_OUTPUT"
+          echo "tag=v$RAW" >> "$GITHUB_OUTPUT"
+
+      - name: Install XcodeGen
+        run: brew install xcodegen
+
+      - name: Generate and build
+        env:
+          MARKETING_VERSION: ${{ steps.ver.outputs.version }}
+        run: |
+          xcodegen generate
+          xcodebuild \
+            -scheme Watari \
+            -configuration Release \
+            -derivedDataPath .build/DerivedData \
+            -destination 'platform=macOS' \
+            CODE_SIGN_IDENTITY=- \
+            CODE_SIGNING_REQUIRED=YES \
+            CODE_SIGNING_ALLOWED=YES \
+            DEVELOPMENT_TEAM= \
+            ENABLE_HARDENED_RUNTIME=NO \
+            MARKETING_VERSION="$MARKETING_VERSION" \
+            CURRENT_PROJECT_VERSION="${{ github.run_number }}" \
+            build
+
+      - name: Zip app
+        env:
+          VERSION: ${{ steps.ver.outputs.version }}
+        run: |
+          APP=".build/DerivedData/Build/Products/Release/Watari.app"
+          test -d "$APP"
+          ditto -c -k --sequesterRsrc --keepParent "$APP" "Watari-v${VERSION}.zip"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Watari-app
+          path: Watari-v*.zip
+
+  release:
+    name: GitHub Release
+    needs: [test, build-mac]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Resolve version
+        id: ver
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            RAW="${{ inputs.version }}"
+          else
+            RAW="${{ github.ref_name }}"
+          fi
+          RAW="${RAW#v}"
+          echo "version=$RAW" >> "$GITHUB_OUTPUT"
+          echo "tag=v$RAW" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: Watari-app
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.ver.outputs.tag }}
+          name: Watari ${{ steps.ver.outputs.tag }}
+          generate_release_notes: true
+          files: Watari-v*.zip
+          body: |
+            ## Artifacts
+
+            - `Watari-v${{ steps.ver.outputs.version }}.zip` — macOS app (Release, **ad-hoc signed / not notarized**)
+
+            ## Signing & notarization
+
+            This CI build is **not** Developer ID–signed or notarized. Gatekeeper will block open-by-default.
+            For distribution: sign and notarize locally with your Apple Developer account, then attach those artifacts (or add signing secrets to this workflow later).
+
+            No repository secrets are required for these unsigned CI builds.
+
+            Marketing version (`CFBundleShortVersionString`) = `${{ steps.ver.outputs.version }}`.
+            Build number (`CFBundleVersion`) = run `${{ github.run_number }}`.
