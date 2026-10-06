@@ -11,7 +11,7 @@ Watari connects two Macs over TLS on a chosen TCP port (default **59234**). Trus
 1. Cleartext Bonjour “resolve” TCP hit the TLS listener on launch, or
 2. TLS identity was taken from the **login keychain** (a loose `kSecClassIdentity` query could resolve an Apple Development signing identity — prompting for the user’s “dev key” and failing the handshake).
 
-**Fix:** each install stores a self-signed **RSA** PKCS#12 under Application Support and loads it into an **app-owned file keychain** (never the login keychain). Clients accept the transport cert via a verify block. Application trust remains the Hello public-key pin after pairing.
+**Fix:** each install stores a self-signed **RSA** PKCS#12 under Application Support and imports it **in-memory only** (`kSecImportToMemoryOnly`) — never the login keychain and never a file keychain (file keychains prompted for a password the user never set). Clients accept the transport cert via a verify block. Application trust remains the Hello public-key pin after pairing.
 
 ## Connect UX
 
@@ -39,7 +39,7 @@ That dialog is almost certainly **Application Firewall**, not keychain and not F
 - **Debug / ad-hoc builds** (`codesign` Signature=adhoc): macOS often asks **again after every rebuild** because the code directory hash changed.
 - **Not fixed by Full Disk Access.** FDA does not authorize firewall or Local Network; PRODUCT.md keeps FDA out of v1 on purpose.
 - **Keychain “dev key”** was a separate bug (login-keychain TLS identity) and is fixed — Watari no longer uses the login keychain for transport TLS.
-- **Keychain “Imported Private Key” / “Watari Peer”:** that is Watari’s self-signed TLS transport key in the app-owned file keychain — **not** Apple Development. If an older Debug build prompts, click **Always Allow** once; current builds set the key ACL so Listen should not ask again.
+- **Keychain password for `tls-rsa` / “Imported Private Key”:** older Debug builds used a file keychain and could ask for a password Jon never chose — **do not type anything**; quit and update. Current builds import TLS in-memory only and must not show a keychain password dialog.
 
 ### How to preapprove (no FDA)
 

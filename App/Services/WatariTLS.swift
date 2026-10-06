@@ -7,11 +7,10 @@ private let tlsLog = Logger(subsystem: "app.watari.mac", category: "TLS")
 
 /// Shared TLS options for Watari peer connections.
 ///
-/// Transport identity lives in an **app-owned file keychain** under Application Support
-/// (`Watari/tls.keychain`) plus a PKCS#12 seed. Nothing is read from or written to the
-/// login keychain — that path previously prompted for the user’s Apple Development
-/// (“dev”) key when a loose `kSecClassIdentity` query resolved the wrong SecIdentity,
-/// and failed handshakes with NWError -9816.
+/// Transport identity is a self-signed **RSA** PKCS#12 under Application Support, imported
+/// **in-process only** (`kSecImportToMemoryOnly`) — never the login keychain and never a
+/// file keychain. File keychains prompted for a password Jon never chose (`tls-rsa.keychain`);
+/// memory-only identities need no unlock UI.
 ///
 /// Application trust remains the Curve25519 key exchanged in Hello (pinned after pairing).
 enum WatariTLS {
@@ -20,14 +19,15 @@ enum WatariTLS {
     /// Filename bumped when switching RSA — LibreSSL EC PKCS#12 crashes SecPKCS12Import on current macOS.
     private static let p12FileName = "tls-identity-rsa.p12"
     private static let passphraseFileName = "tls-identity-rsa.pass"
-    private static let fileKeychainName = "tls-rsa.keychain"
 
+    /// Strong refs so the in-memory PKCS#12 identity outlives import.
+    nonisolated(unsafe) private static var retainedImportItems: CFArray?
     nonisolated(unsafe) private static let localIdentity: SecIdentity? = {
+        // Never show keychain password / ACL sheets for transport TLS.
         SecKeychainSetUserInteractionAllowed(false)
-        defer { SecKeychainSetUserInteractionAllowed(true) }
 
         deleteLegacyLoginKeychainItems()
-        deleteLegacyECIdentityFiles()
+        deleteLegacyKeychainFiles()
 
         do {
             return try loadOrCreateIdentity()
@@ -65,13 +65,12 @@ enum WatariTLS {
         return NWParameters(tls: tls, tcp: tcp)
     }
 
-    // MARK: - App-owned file keychain + PKCS#12
+    // MARK: - PKCS#12 on disk → in-memory SecIdentity (no keychain)
 
     private static func loadOrCreateIdentity() throws -> SecIdentity {
         let dir = try supportDirectory()
         let passURL = dir.appendingPathComponent(passphraseFileName)
         let p12URL = dir.appendingPathComponent(p12FileName)
-        let keychainURL = dir.appendingPathComponent(fileKeychainName)
 
         let passphrase: String
         if let existing = try? String(contentsOf: passURL, encoding: .utf8),
@@ -88,97 +87,7 @@ enum WatariTLS {
             try? FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: p12URL.path)
         }
 
-        let keychain = try openFileKeychain(at: keychainURL, passphrase: passphrase)
-        if let existing = copyIdentity(from: keychain) {
-            // Re-apply ACL every launch so ad-hoc Debug rebuilds stay trusted.
-            if applyUnpromptedAccess(to: existing) {
-                relabelIdentity(existing)
-                tlsLog.info("TLS identity ready (existing file keychain item)")
-                return existing
-            }
-            // Existing key ACL may require an interactive owner change — recreate from p12 with ACL at import.
-            tlsLog.info("Recreating file keychain so TLS key ACL can be set without a prompt")
-            try? FileManager.default.removeItem(at: keychainURL)
-            let fresh = try openFileKeychain(at: keychainURL, passphrase: passphrase)
-            return try importPKCS12(from: p12URL, passphrase: passphrase, into: fresh)
-        }
-        return try importPKCS12(from: p12URL, passphrase: passphrase, into: keychain)
-    }
-
-    private static func copyIdentity(from keychain: SecKeychain) -> SecIdentity? {
-        let query: [String: Any] = [
-            kSecClass as String: kSecClassIdentity,
-            kSecMatchSearchList as String: [keychain],
-            kSecReturnRef as String: true,
-            kSecMatchLimit as String: kSecMatchLimitOne,
-        ]
-        var item: CFTypeRef?
-        let status = SecItemCopyMatching(query as CFDictionary, &item)
-        guard status == errSecSuccess, let item else { return nil }
-        return (item as! SecIdentity)
-    }
-
-    /// Access that lets Watari sign with the TLS key without an "Always Allow" sheet.
-    /// `applicationList: nil` = any process that already unlocked this app-owned file keychain
-    /// (only Watari has the passphrase). Survives ad-hoc Debug re-ships better than pinning
-    /// a single code-directory hash via SecTrustedApplication.
-    private static func makeUnpromptedAccess() -> SecAccess? {
-        var access: SecAccess?
-        let status = SecAccessCreate("Watari Peer" as CFString, [] as CFArray, &access)
-        guard status == errSecSuccess, let access else {
-            tlsLog.error("SecAccessCreate \(status)")
-            return nil
-        }
-        var acl: SecACL?
-        let aclStatus = SecACLCreateWithSimpleContents(
-            access,
-            nil,
-            "Watari Peer" as CFString,
-            [],
-            &acl
-        )
-        if aclStatus != errSecSuccess {
-            tlsLog.error("SecACLCreateWithSimpleContents \(aclStatus)")
-            // Fall back: trust only the calling app (may re-prompt after ad-hoc rebuilds).
-            var fallback: SecAccess?
-            if SecAccessCreate("Watari Peer" as CFString, nil, &fallback) == errSecSuccess {
-                return fallback
-            }
-            return nil
-        }
-        return access
-    }
-
-    @discardableResult
-    private static func applyUnpromptedAccess(to identity: SecIdentity) -> Bool {
-        guard let access = makeUnpromptedAccess() else { return false }
-        var privateKey: SecKey?
-        guard SecIdentityCopyPrivateKey(identity, &privateKey) == errSecSuccess,
-              let privateKey else { return false }
-        let item = privateKey as! SecKeychainItem
-        let status = SecKeychainItemSetAccess(item, access)
-        if status != errSecSuccess {
-            tlsLog.error("SecKeychainItemSetAccess \(status)")
-            return false
-        }
-        tlsLog.info("TLS private-key ACL set (no Always Allow prompt)")
-        return true
-    }
-
-    /// PKCS#12 import labels the key "Imported Private Key" by default — rename for clarity.
-    private static func relabelIdentity(_ identity: SecIdentity) {
-        var privateKey: SecKey?
-        if SecIdentityCopyPrivateKey(identity, &privateKey) == errSecSuccess, let privateKey {
-            let update: [String: Any] = [kSecAttrLabel as String: "Watari Peer"]
-            let query: [String: Any] = [kSecValueRef as String: privateKey]
-            _ = SecItemUpdate(query as CFDictionary, update as CFDictionary)
-        }
-        var certificate: SecCertificate?
-        if SecIdentityCopyCertificate(identity, &certificate) == errSecSuccess, let certificate {
-            let update: [String: Any] = [kSecAttrLabel as String: "Watari Peer"]
-            let query: [String: Any] = [kSecValueRef as String: certificate]
-            _ = SecItemUpdate(query as CFDictionary, update as CFDictionary)
-        }
+        return try importPKCS12ToMemory(from: p12URL, passphrase: passphrase)
     }
 
     private static func supportDirectory() throws -> URL {
@@ -189,78 +98,39 @@ enum WatariTLS {
         return dir
     }
 
-    private static func openFileKeychain(at url: URL, passphrase: String) throws -> SecKeychain {
-        var keychain: SecKeychain?
-        let path = url.path
-        let pwd = passphrase
-        let pwdLen = UInt32(pwd.utf8.count)
-
-        if FileManager.default.fileExists(atPath: path) {
-            var status = SecKeychainOpen(path, &keychain)
-            guard status == errSecSuccess, let keychain else {
-                throw TLSIdentityError.keyed("keychain open \(status)")
-            }
-            status = SecKeychainUnlock(keychain, pwdLen, pwd, true)
-            if status != errSecSuccess && status != errSecAuthFailed {
-                // Retry after recreate if unlock fails hard.
-                tlsLog.error("Keychain unlock \(status) — recreating")
-                try? FileManager.default.removeItem(at: url)
-                return try createFileKeychain(at: url, passphrase: passphrase)
-            }
-            if status == errSecAuthFailed {
-                try? FileManager.default.removeItem(at: url)
-                return try createFileKeychain(at: url, passphrase: passphrase)
-            }
-            return keychain
-        }
-        return try createFileKeychain(at: url, passphrase: passphrase)
-    }
-
-    private static func createFileKeychain(at url: URL, passphrase: String) throws -> SecKeychain {
-        var keychain: SecKeychain?
-        let pwd = passphrase
-        let status = SecKeychainCreate(
-            url.path,
-            UInt32(pwd.utf8.count),
-            pwd,
-            false,
-            nil,
-            &keychain
-        )
-        guard status == errSecSuccess || status == errSecDuplicateKeychain, let keychain else {
-            throw TLSIdentityError.keyed("keychain create \(status)")
-        }
-        if status == errSecDuplicateKeychain {
-            return try openFileKeychain(at: url, passphrase: passphrase)
-        }
-        // Avoid any ACL prompts on keys stored here.
-        SecKeychainSetUserInteractionAllowed(false)
-        return keychain
-    }
-
-    private static func importPKCS12(from url: URL, passphrase: String, into keychain: SecKeychain) throws -> SecIdentity {
+    private static func importPKCS12ToMemory(from url: URL, passphrase: String) throws -> SecIdentity {
         let data = try Data(contentsOf: url)
         var items: CFArray?
-        // Import into the Watari file keychain only — never login keychain, never memory-only
-        // (memory-only PKCS12 import crashes on some macOS builds with NULL SecKeyRef).
-        var options: [String: Any] = [
+        let options: [String: Any] = [
             kSecImportExportPassphrase as String: passphrase,
-            kSecImportExportKeychain as String: keychain,
+            kSecImportToMemoryOnly as String: kCFBooleanTrue as Any,
         ]
-        if let access = makeUnpromptedAccess() {
-            options[kSecImportExportAccess as String] = access
-        }
         let status = SecPKCS12Import(data as CFData, options as CFDictionary, &items)
-        guard status == errSecSuccess, let items = items as? [[String: Any]], let first = items.first else {
-            throw TLSIdentityError.keyed("PKCS12 import \(status)")
+        guard status == errSecSuccess, let items else {
+            throw TLSIdentityError.keyed("PKCS12 memory import \(status)")
         }
-        guard let identityRef = first[kSecImportItemIdentity as String] else {
+        guard let dicts = items as? [[String: Any]],
+              let first = dicts.first,
+              let identityRef = first[kSecImportItemIdentity as String] else {
             throw TLSIdentityError.keyed("PKCS12 missing identity")
         }
         let identity = identityRef as! SecIdentity
-        applyUnpromptedAccess(to: identity)
-        relabelIdentity(identity)
-        tlsLog.info("TLS identity ready (Application Support file keychain)")
+
+        // Retain the import array for process lifetime (identity refs into it).
+        retainedImportItems = items
+
+        // Sanity: private key must be usable without a keychain unlock.
+        var privateKey: SecKey?
+        let keyStatus = SecIdentityCopyPrivateKey(identity, &privateKey)
+        guard keyStatus == errSecSuccess, let privateKey,
+              SecKeyCopyExternalRepresentation(privateKey, nil) != nil else {
+            throw TLSIdentityError.keyed("memory identity has unusable private key (\(keyStatus))")
+        }
+        if sec_identity_create(identity) == nil {
+            throw TLSIdentityError.keyed("sec_identity_create failed for memory identity")
+        }
+
+        tlsLog.info("TLS identity ready (in-memory PKCS12; no file keychain)")
         return identity
     }
 
@@ -316,14 +186,20 @@ enum WatariTLS {
         }
     }
 
-    /// Drop EC PKCS#12 / keychain from the first TLS fix (import crashed with NULL SecKeyRef).
-    private static func deleteLegacyECIdentityFiles() {
+    /// Drop EC PKCS#12 **and** any file keychains from earlier TLS fixes (those prompted for a password).
+    private static func deleteLegacyKeychainFiles() {
         guard let dir = try? supportDirectory() else { return }
         for name in [
-            "tls-identity.p12", "tls-identity.pass", "tls.keychain", "tls.keychain-db",
+            "tls-identity.p12", "tls-identity.pass",
+            "tls.keychain", "tls.keychain-db",
+            "tls-rsa.keychain", "tls-rsa.keychain-db",
             "tls-tmp-key.pem", "tls-tmp-cert.pem",
         ] {
-            try? FileManager.default.removeItem(at: dir.appendingPathComponent(name))
+            let url = dir.appendingPathComponent(name)
+            if FileManager.default.fileExists(atPath: url.path) {
+                try? FileManager.default.removeItem(at: url)
+                tlsLog.info("Removed legacy TLS file \(name, privacy: .public)")
+            }
         }
     }
 
