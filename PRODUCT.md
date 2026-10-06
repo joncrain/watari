@@ -12,7 +12,7 @@ Swift 6, SwiftUI (macOS 14+), portable `WatariCore` package (Linux-testable), Ne
 
 ## Users
 
-**Primary (priority 1):** People moving or backing up chosen folders between two Macs they control — home desks, lab benches, or replacement machines — who want a preview and a log, not a full account migration.
+**Primary (priority 1):** People moving or backing up chosen folders between two Macs they control — home desks, lab benches, or replacement machines — who want a clear transfer plan and a log, not a full account migration.
 
 **Secondary (priority 2):** IT / Mac admins who need explicit host/port connect on segmented networks, MDM-toggleable Nearby discovery, and an audit trail of permission exceptions — without another Migration Assistant that breaks profiles.
 
@@ -40,8 +40,9 @@ Not Migration Assistant. Not cloud sync. A calm, first-party-feeling Mac utility
 
 - One-way copy of selected folder trees to a paired peer.
 - **Source prep:** with Listen on, the main window shows the offer catalog and **Add folder…** (destination only chooses what to pull).
-- **Destination transfer:** first screen is Connect/pull; after Connect, select offered folders (home mapping). **Preview** (optional) and **Start**, then a **transfer complete** summary. Source Mac emphasizes Prepare/offer when a peer connects inbound.
-- Preview: unchanged / copy / update / skip / permission exceptions.
+- **Destination transfer:** first screen is Connect/pull; after Connect, select offered folders. **Under-home** offers mirror into the destination home; **custom Add folder** paths outside the source home keep their **full absolute path**. **Start** pulls (no Preview control). Then a **transfer complete** summary. Source Mac emphasizes Prepare/offer when a peer connects inbound.
+- Internal `PreviewDiff` still decides copy/update/skip during Start; not a user-facing Preview step.
+- **Dock POC:** source includes Dock layout in the offer catalog; destination shows a live miniature Dock strip in Services (apply later).
 - Permission policy: remap owner to receiving user by default; keep mode; ACL/xattr rules; strip quarantine by default.
 - Built-in denylist: keychains, TCC database, configuration profiles.
 - Connect via Nearby device list (Bonjour) when discovery allows, or hostname / FQDN / IP + port; TLS with pinned peer keys after pairing.
@@ -66,14 +67,14 @@ Not Migration Assistant. Not cloud sync. A calm, first-party-feeling Mac utility
 ## Product Principles
 
 1. **Chosen folders only** — bookmarks beat Full Disk Access.
-2. **Permissions are the product** — preview metadata outcomes.
+2. **Permissions are the product** — surface permission outcomes in the transfer plan and log.
 3. **Connect without guessing** — Nearby when the LAN allows; host/port always works and is required on Managed / segmented nets.
 4. **Pin trust** — TLS after pairing; revoke peers.
 5. **Stay out of identity** — never a second Migration Assistant.
 
 ## Accessibility & Inclusion
 
-VoiceOver labels on all primary controls; Reduce Motion honored; keyboard equivalents for Preview, Start, Stop; Dynamic Type / sidebar icon size respect where system provides them.
+VoiceOver labels on all primary controls; Reduce Motion honored; keyboard equivalents for Start, Stop; Dynamic Type / sidebar icon size respect where system provides them.
 
 ## Later
 

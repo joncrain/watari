@@ -1,11 +1,17 @@
 import Foundation
 
-/// Map source absolute roots onto the destination user’s home (same relative place).
+/// Map source absolute roots onto the destination Mac.
 ///
-/// Example: source `/Users/joncrain/Desktop` → destination `/Users/jon.crain/Desktop`
-/// when each Mac’s home differs. Offer catalog paths carry the source absolute prefix;
-/// we infer the source home and rewrite under `FileManager`’s current-user home.
+/// - **Whitelist / under-home paths** (e.g. Desktop, Documents, or
+///   `~/Projects/Foo`): rewrite the source home prefix into the destination
+///   user’s home so `/Users/joncrain/Desktop` → `/Users/jon.crain/Desktop`.
+/// - **Custom paths outside the source home** (Add folder… to `/Volumes/…`,
+///   `/opt/…`, etc.): keep the **full absolute path** on the destination.
 public enum HomePathMapper {
+    public static let whitelistFolderNames: Set<String> = [
+        "Desktop", "Documents", "Downloads", "Pictures", "Movies", "Music", "Public",
+    ]
+
     /// Infer `/Users/<name>` or `/home/<name>` from absolute folder paths.
     public static func inferUserHome(from paths: [String]) -> String? {
         let inferred = paths.compactMap(userHomePrefix(of:))
@@ -21,7 +27,6 @@ public enum HomePathMapper {
     public static func userHomePrefix(of absolutePath: String) -> String? {
         let standardized = (absolutePath as NSString).standardizingPath
         let parts = (standardized as NSString).pathComponents
-        // ["/", "Users", "ada", ...]
         guard parts.count >= 3 else { return nil }
         let root = parts[1]
         guard root == "Users" || root == "home" else { return nil }
@@ -38,6 +43,19 @@ public enum HomePathMapper {
         return String(abs.dropFirst(prefix.count))
     }
 
+    /// Whether this offer should mirror under the destination home.
+    public static func shouldMirrorIntoHome(
+        sourceAbsolutePath: String,
+        sourceHome: String?
+    ) -> Bool {
+        guard let sourceHome,
+              let relative = relativePath(absolute: sourceAbsolutePath, home: sourceHome),
+              !relative.isEmpty
+        else { return false }
+        // Any path under the source home (whitelist or custom ~/…) remaps home prefix.
+        return true
+    }
+
     /// Destination folder URL for one offered source root.
     public static func mapRoot(
         sourceAbsolutePath: String,
@@ -45,21 +63,24 @@ public enum HomePathMapper {
         destinationHome: URL
     ) -> URL {
         let destHome = destinationHome.standardizedFileURL
-        if let sourceHome,
+        let sourceURL = URL(fileURLWithPath: sourceAbsolutePath, isDirectory: true).standardizedFileURL
+
+        if shouldMirrorIntoHome(sourceAbsolutePath: sourceAbsolutePath, sourceHome: sourceHome),
+           let sourceHome,
            let relative = relativePath(absolute: sourceAbsolutePath, home: sourceHome),
            !relative.isEmpty {
             return destHome.appendingPathComponent(relative, isDirectory: true)
         }
-        let name = URL(fileURLWithPath: sourceAbsolutePath).standardizedFileURL.lastPathComponent
-        return destHome.appendingPathComponent(name, isDirectory: true)
+
+        // Custom Add folder outside the source home — keep the absolute path.
+        return sourceURL
     }
 
     /// Display-name → destination root URL for a pull.
     ///
     /// - When `overrideParent` is set (advanced), roots land as `overrideParent/<name>/…`
-    ///   (legacy single receive-folder behavior).
-    /// - Otherwise each offer maps to the same place under `destinationHome` as under the
-    ///   inferred source home.
+    /// - Otherwise: under-home offers mirror into `destinationHome`; outside-home offers
+    ///   keep their absolute path.
     public static func destinationRoots(
         offers: [OfferedRoot],
         destinationHome: URL,

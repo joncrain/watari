@@ -37,9 +37,6 @@ struct RootView: View {
 
             ToolbarItemGroup(placement: .primaryAction) {
                 if model.selectedPeerID != nil, model.phase != .transferComplete, !model.shouldShowSourcePrep {
-                    Button("Preview", systemImage: "list.bullet.rectangle") { model.preview() }
-                        .disabled(!model.canPreview)
-                        .help(model.previewBlockedReason ?? "Preview what will copy from the source Mac")
                     Button("Start", systemImage: "play.fill") { model.start() }
                         .disabled(!model.canStart)
                         .help(model.startBlockedReason ?? "Pull selected folders to this Mac")

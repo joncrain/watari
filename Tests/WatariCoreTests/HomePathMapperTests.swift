@@ -52,4 +52,21 @@ struct HomePathMapperTests {
         )
         #expect(roots["Desktop"]?.path == "/Users/jon.crain/Transfers/Desktop")
     }
+
+    @Test("outside-home custom offers keep absolute destination path")
+    func outsideHomeAbsolute() {
+        let destHome = URL(fileURLWithPath: "/Users/jon.crain", isDirectory: true)
+        let offers = [
+            OfferedRoot(name: "Desktop", path: "/Users/joncrain/Desktop", totalBytes: 1, entryCount: 1),
+            OfferedRoot(name: "Stuff", path: "/Volumes/Data/Stuff", totalBytes: 2, entryCount: 2),
+            OfferedRoot(name: "Opt", path: "/opt/UnitySrc/project", totalBytes: 3, entryCount: 3),
+        ]
+        let roots = HomePathMapper.destinationRoots(offers: offers, destinationHome: destHome)
+        #expect(roots["Desktop"]?.path == "/Users/jon.crain/Desktop")
+        #expect(roots["Stuff"]?.path == "/Volumes/Data/Stuff")
+        #expect(roots["Opt"]?.path == "/opt/UnitySrc/project")
+
+        let labels = HomePathMapper.mappingLabels(offers: offers, destinationHome: destHome)
+        #expect(labels.contains(where: { $0.name == "Stuff" && $0.destinationPath == "/Volumes/Data/Stuff" }))
+    }
 }

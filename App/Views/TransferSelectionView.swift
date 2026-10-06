@@ -72,7 +72,7 @@ struct TransferSelectionView: View {
                 VStack(alignment: .leading, spacing: 8) {
                     Text("Services")
                         .font(.headline)
-                    Text("App data and settings. Coming later — not part of the folder transfer.")
+                    Text("App data and settings. Dock shows a live miniature of the source Mac when connected.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
 
@@ -113,7 +113,7 @@ struct TransferSelectionView: View {
         case .copying:
             return "Transferring selected folders…"
         case .peerGone:
-            return "The other Mac disconnected. Reconnect, then Preview again."
+            return "The other Mac disconnected. Reconnect to continue."
         case .browsingOffers:
             return model.statusMessage
         case .needsConnect:
@@ -173,7 +173,7 @@ struct TransferSelectionView: View {
         VStack(alignment: .leading, spacing: 0) {
             comingSoonRow(title: "Services", systemImage: "app.dashed", detail: "Mail, Safari, and other apps")
             Divider().padding(.leading, 44)
-            comingSoonRow(title: "Dock", systemImage: "dock.rectangle", detail: "Dock layout and items")
+            dockServiceRow
             Divider().padding(.leading, 44)
             comingSoonRow(title: "Finder", systemImage: "folder", detail: "Finder preferences")
         }
@@ -184,6 +184,50 @@ struct TransferSelectionView: View {
             RoundedRectangle(cornerRadius: 6, style: .continuous)
                 .strokeBorder(Color(nsColor: .separatorColor), lineWidth: 1)
         )
+    }
+
+    private var dockServiceRow: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 8) {
+                Image(systemName: "checkmark.square.fill")
+                    .font(.body)
+                    .foregroundStyle(Color.accentColor)
+                    .frame(width: 16, height: 16)
+                    .accessibilityHidden(true)
+                Image(systemName: "dock.rectangle")
+                    .foregroundStyle(.secondary)
+                    .frame(width: 18)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text("Dock")
+                    Text(dockDetail)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                Spacer(minLength: 8)
+                Text(model.peerDockApps.isEmpty ? "Waiting" : "Live")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            DockPreviewView(
+                apps: model.peerDockApps,
+                iconSize: 22,
+                emptyText: model.selectedPeerID == nil
+                    ? "Connect to see the source Dock"
+                    : "Source isn’t sending Dock layout yet"
+            )
+            .padding(.leading, 44)
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 8)
+        .accessibilityElement(children: .contain)
+    }
+
+    private var dockDetail: String {
+        if model.peerDockApps.isEmpty {
+            return "Source Dock layout (when connected)"
+        }
+        return "\(model.peerDockApps.count) apps from source — preview only"
     }
 
     private func comingSoonRow(title: String, systemImage: String, detail: String) -> some View {
@@ -227,14 +271,14 @@ struct TransferSelectionView: View {
             .foregroundStyle(.secondary)
     }
 
-    /// Home mapping (default) or advanced single-parent override + Preview / Start.
+    /// Home mapping (default) or advanced single-parent override + Start.
     private var receiveAndActions: some View {
         VStack(alignment: .leading, spacing: 10) {
             Text("Receive on this Mac")
                 .font(.subheadline.weight(.medium))
 
             if model.usesHomeReceiveMapping {
-                Text("Folders land in the same place under your home directory as on the source (for example Desktop → Desktop). Ownership remaps to your user.")
+                Text("Under-home folders mirror into your home (Desktop → Desktop). Custom paths outside the source home keep their full absolute path. Ownership remaps to your user.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                 if !model.selectedOfferNames.isEmpty {
@@ -269,9 +313,6 @@ struct TransferSelectionView: View {
             .font(.caption)
 
             HStack(spacing: 12) {
-                Button("Preview") { model.preview() }
-                    .disabled(!model.canPreview)
-                    .help(model.previewBlockedReason ?? "Preview what will copy")
                 Button("Start") { model.start() }
                     .buttonStyle(.borderedProminent)
                     .disabled(!model.canStart)
@@ -284,14 +325,10 @@ struct TransferSelectionView: View {
             }
             .controlSize(.large)
 
-            if let reason = model.startBlockedReason ?? model.previewBlockedReason {
+            if let reason = model.startBlockedReason {
                 Text(reason)
                     .font(.caption)
                     .foregroundStyle(.orange)
-            } else if model.phase != .previewReady && model.phase != .copying {
-                Text("Preview is optional. Start pulls the selected folders now.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
             }
         }
         .padding(.top, 8)
@@ -307,7 +344,7 @@ struct TransferSelectionView: View {
         case .previewReady, .finishedWithExceptions:
             if let preview = model.previewSummary {
                 Text(
-                    "Preview: \(preview.copy) copy · \(preview.update) update · \(preview.unchanged) unchanged · \(preview.skip) skip"
+                    "Plan: \(preview.copy) copy · \(preview.update) update · \(preview.unchanged) unchanged · \(preview.skip) skip"
                 )
                 .font(.caption)
                 .foregroundStyle(.secondary)

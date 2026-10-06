@@ -11,7 +11,7 @@ struct SettingsView: View {
                     Text("Watari copies chosen folders only. It does not migrate accounts, apps, or MDM profiles.")
                         .foregroundStyle(.secondary)
                     Section("Receive (this Mac is the destination)") {
-                        Text("By default, pulled folders map into the same place under your home directory as on the source (Desktop → Desktop). Ownership remaps to you.")
+                        Text("By default, under-home folders map into the same place under your home (Desktop → Desktop). Custom Add folder paths outside the source home keep their absolute path. Ownership remaps to you.")
                             .font(.caption)
                             .foregroundStyle(.secondary)
                         if let receive = model.receiveFolder {
@@ -125,7 +125,7 @@ struct SettingsView: View {
                         Toggle("Block inbound", isOn: .constant(model.dlp.blockInbound))
                             .disabled(true)
                     }
-                    Text("DLP is configured via MDM (`app.watari.mac`). Full transfer gates ship in a later release; Preview already skips matching files when enabled.")
+                    Text("DLP is configured via MDM (`app.watari.mac`). Full transfer gates ship in a later release; matching files are skipped during Start when enabled.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }

@@ -178,13 +178,44 @@ public struct OfferCatalogRequestPayload: Codable, Sendable, Equatable {
     }
 }
 
+/// One pinned Dock app from the source Mac (layout preview / future apply).
+public struct DockAppOffer: Codable, Sendable, Equatable, Identifiable, Hashable {
+    public var bundlePath: String
+    public var displayName: String
+
+    public var id: String { bundlePath }
+
+    public init(bundlePath: String, displayName: String) {
+        self.bundlePath = bundlePath
+        self.displayName = displayName
+    }
+}
+
 public struct OfferCatalogResponsePayload: Codable, Sendable, Equatable {
     public var displayName: String
     public var roots: [OfferedRoot]
+    /// Source Mac Dock `persistent-apps` projection (optional; older peers omit).
+    public var dockApps: [DockAppOffer]
 
-    public init(displayName: String, roots: [OfferedRoot]) {
+    public init(
+        displayName: String,
+        roots: [OfferedRoot],
+        dockApps: [DockAppOffer] = []
+    ) {
         self.displayName = displayName
         self.roots = roots
+        self.dockApps = dockApps
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case displayName, roots, dockApps
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        displayName = try c.decode(String.self, forKey: .displayName)
+        roots = try c.decode([OfferedRoot].self, forKey: .roots)
+        dockApps = try c.decodeIfPresent([DockAppOffer].self, forKey: .dockApps) ?? []
     }
 }
 

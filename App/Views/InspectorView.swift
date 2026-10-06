@@ -42,7 +42,7 @@ struct InspectorView: View {
                 }
             }
             Section("Exceptions") {
-                LabeledContent("In last preview", value: "\(model.exceptionCount)")
+                LabeledContent("In last inventory", value: "\(model.exceptionCount)")
                 LabeledContent("Log events", value: "\(model.jobLog.events.count)")
                 Button("Export log…") { model.exportExceptionLog() }
                     .disabled(model.previewSummary == nil && model.jobLog.events.isEmpty)

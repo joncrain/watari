@@ -28,7 +28,9 @@ final class JobListener: @unchecked Sendable {
         onIndexUpdate: @escaping @Sendable ([FileMetadata]) -> Void,
         onError: @escaping @Sendable (String) -> Void,
         onClientConnected: (@Sendable () -> Void)? = nil,
-        onClientDisconnected: (@Sendable () -> Void)? = nil
+        onClientDisconnected: (@Sendable () -> Void)? = nil,
+        /// Rebuilt per catalog request so Dock layout stays live while Listen is on.
+        offerCatalogProvider: (@Sendable () -> OfferCatalogResponsePayload)? = nil
     ) throws {
         stop()
         guard let nwPort = NWEndpoint.Port(rawValue: UInt16(port)) else {
@@ -46,7 +48,8 @@ final class JobListener: @unchecked Sendable {
             listenLog.info("Advertising Bonjour \(BonjourBrowser.serviceType, privacy: .public) as \(name, privacy: .public)")
         }
 
-        let catalog = offerCatalog
+        let catalogSnapshot = offerCatalog
+        let catalogProvider = offerCatalogProvider
         let offered = offeredRoots
         let receive = receiveRoot
         listener.newConnectionHandler = { [weak self] connection in
@@ -62,6 +65,7 @@ final class JobListener: @unchecked Sendable {
                     onClientDisconnected?()
                 }
                 do {
+                    let catalog = catalogProvider?() ?? catalogSnapshot
                     try await session.serve(
                         on: connection,
                         receiveRoot: receive,
@@ -71,7 +75,8 @@ final class JobListener: @unchecked Sendable {
                         displayName: name,
                         applier: applier,
                         onIndexUpdate: onIndexUpdate,
-                        progress: { _, _ in }
+                        progress: { _, _ in },
+                        offerCatalogProvider: catalogProvider
                     )
                 } catch {
                     let text = error.localizedDescription

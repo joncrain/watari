@@ -227,6 +227,7 @@ final class TransferSession: @unchecked Sendable {
     ///   - receiveRoot: Where inbound push jobs write (destination role).
     ///   - offeredRoots: Display-name → URL this Mac can send (source role).
     ///   - offerCatalog: Snapshot of offered roots + index totals for destination-primary UI.
+    ///   - offerCatalogProvider: Optional live rebuild (Dock apps) per catalog request.
     func serve(
         on connection: NWConnection,
         receiveRoot: URL?,
@@ -236,7 +237,8 @@ final class TransferSession: @unchecked Sendable {
         displayName: String,
         applier: PermissionApplier,
         onIndexUpdate: @escaping @Sendable ([FileMetadata]) -> Void,
-        progress: @escaping @Sendable (Double, String?) -> Void
+        progress: @escaping @Sendable (Double, String?) -> Void,
+        offerCatalogProvider: (@Sendable () -> OfferCatalogResponsePayload)? = nil
     ) async throws {
         cancelled = false
         let frames = FrameBuffer()
@@ -258,6 +260,7 @@ final class TransferSession: @unchecked Sendable {
                 receiveRoot: receiveRoot,
                 offeredRoots: offeredRoots,
                 offerCatalog: offerCatalog,
+                offerCatalogProvider: offerCatalogProvider,
                 applier: applier,
                 onIndexUpdate: onIndexUpdate,
                 progress: progress
@@ -279,6 +282,7 @@ final class TransferSession: @unchecked Sendable {
                 receiveRoot: receiveRoot,
                 offeredRoots: offeredRoots,
                 offerCatalog: offerCatalog,
+                offerCatalogProvider: offerCatalogProvider,
                 applier: applier,
                 onIndexUpdate: onIndexUpdate,
                 progress: progress
@@ -296,14 +300,16 @@ final class TransferSession: @unchecked Sendable {
         receiveRoot: URL?,
         offeredRoots: [String: URL],
         offerCatalog: OfferCatalogResponsePayload,
+        offerCatalogProvider: (@Sendable () -> OfferCatalogResponsePayload)?,
         applier: PermissionApplier,
         onIndexUpdate: @escaping @Sendable ([FileMetadata]) -> Void,
         progress: @escaping @Sendable (Double, String?) -> Void
     ) async throws -> Bool {
         switch frame.type {
         case .offerCatalogRequest:
+            let catalog = offerCatalogProvider?() ?? offerCatalog
             try await send(
-                try TransferCodec.encodeJSON(.offerCatalogResponse, offerCatalog),
+                try TransferCodec.encodeJSON(.offerCatalogResponse, catalog),
                 on: connection
             )
             return false

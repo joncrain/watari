@@ -18,9 +18,6 @@ struct WatariApp: App {
         .commands {
             CommandGroup(replacing: .newItem) {}
             CommandMenu("Job") {
-                Button("Preview") { appModel.preview() }
-                    .keyboardShortcut("p", modifiers: [.command])
-                    .disabled(!appModel.canPreview)
                 Button("Start") { appModel.start() }
                     .keyboardShortcut("r", modifiers: [.command])
                     .disabled(!appModel.canStart)

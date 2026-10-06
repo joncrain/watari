@@ -31,6 +31,8 @@ final class AppModel: ObservableObject {
     /// Catalog from the connected source peer.
     @Published var peerOffers: [OfferedRoot] = []
     @Published var peerOfferDisplayName: String = ""
+    /// Source Mac Dock layout from the offer catalog (live preview).
+    @Published var peerDockApps: [DockAppOffer] = []
     /// Display names selected from `peerOffers` to pull.
     @Published var selectedOfferNames: Set<String> = []
     @Published var previewSummary: PreviewSummary?
@@ -85,14 +87,7 @@ final class AppModel: ObservableObject {
             .appendingPathComponent("local-index.json")
     }()
 
-    var canPreview: Bool {
-        selectedPeerID != nil
-            && !selectedOfferNames.isEmpty
-            && phase != .copying
-            && phase != .needsConnect
-    }
-
-    /// Start pulls selected folders; Preview is optional but recommended.
+    /// Start pulls selected folders. `PreviewDiff` still runs inside the transfer pipeline.
     var canStart: Bool {
         selectedPeerID != nil
             && !selectedOfferNames.isEmpty
@@ -103,15 +98,6 @@ final class AppModel: ObservableObject {
     var canStop: Bool { phase == .copying }
     var exceptionCount: Int { previewSummary?.permissionExceptionCount ?? 0 }
     var isListening: Bool { jobListener.isListening }
-
-    /// Why Preview is disabled (nil when enabled).
-    var previewBlockedReason: String? {
-        if canPreview { return nil }
-        if phase == .copying { return "Transfer in progress." }
-        if selectedPeerID == nil || phase == .needsConnect { return "Connect to a source Mac first." }
-        if selectedOfferNames.isEmpty { return "Select at least one folder to transfer." }
-        return nil
-    }
 
     /// Why Start is disabled (nil when enabled).
     var startBlockedReason: String? {
@@ -196,7 +182,7 @@ final class AppModel: ObservableObject {
         previewSummary = nil
         if phase == .previewReady || phase == .finishedWithExceptions || phase == .transferComplete {
             phase = .browsingOffers
-            statusMessage = "Selection changed. Run Preview again."
+            statusMessage = "Selection changed."
         }
     }
 
@@ -212,6 +198,21 @@ final class AppModel: ObservableObject {
         }
     }
 
+    func applyOfferCatalog(_ catalog: OfferCatalogResponsePayload) {
+        peerOffers = catalog.roots.sorted {
+            $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending
+        }
+        peerOfferDisplayName = catalog.displayName
+        peerDockApps = catalog.dockApps
+        selectedOfferNames = selectedOfferNames.intersection(Set(catalog.roots.map(\.name)))
+        phase = .browsingOffers
+        if catalog.roots.isEmpty {
+            statusMessage = "\(catalog.displayName) isn’t offering folders yet. On that Mac, enable Listen and offer folders in Settings."
+        } else {
+            statusMessage = "Connected to \(catalog.displayName). Choose folders to transfer here."
+        }
+    }
+
     func refreshPeerOffers() {
         guard let peer = selectedPeer else { return }
         isRefreshingOffers = true
@@ -220,18 +221,8 @@ final class AppModel: ObservableObject {
             do {
                 let catalog = try await transfer.fetchOfferCatalog(peer: peer, connector: peerConnector)
                 await MainActor.run {
-                    self.peerOffers = catalog.roots.sorted {
-                        $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending
-                    }
-                    self.peerOfferDisplayName = catalog.displayName
-                    self.selectedOfferNames = self.selectedOfferNames.intersection(Set(catalog.roots.map(\.name)))
-                    self.phase = .browsingOffers
+                    self.applyOfferCatalog(catalog)
                     self.isRefreshingOffers = false
-                    if catalog.roots.isEmpty {
-                        self.statusMessage = "\(catalog.displayName) isn’t offering folders yet. On that Mac, enable Listen and offer folders in Settings."
-                    } else {
-                        self.statusMessage = "Connected to \(catalog.displayName). Choose folders to transfer here."
-                    }
                 }
             } catch {
                 await MainActor.run {
@@ -346,7 +337,7 @@ final class AppModel: ObservableObject {
             log = jobLog
         }
         guard !log.events.isEmpty else {
-            lastError = "Nothing to export yet — run Preview first."
+            lastError = "Nothing to export yet — run a transfer or wait for permission notes."
             return
         }
         do {
@@ -354,7 +345,7 @@ final class AppModel: ObservableObject {
             let panel = NSSavePanel()
             panel.allowedContentTypes = [.json]
             panel.nameFieldStringValue = "watari-exceptions.jsonl"
-            panel.message = "Export Preview actions and permission exceptions (JSON Lines)."
+            panel.message = "Export transfer actions and permission exceptions (JSON Lines)."
             guard panel.runModal() == .OK, let url = panel.url else { return }
             try data.write(to: url, options: .atomic)
             statusMessage = "Exported \(log.exceptionEvents.count) exception(s), \(log.events.count) event(s)."
@@ -364,11 +355,13 @@ final class AppModel: ObservableObject {
         }
     }
 
-    // MARK: - Preview / pull
+    // MARK: - Pull
 
+    /// Internal inventory dry-run used by Start’s transfer path and exception export.
+    /// Not exposed in the UI.
     func preview() {
-        guard canPreview, let peer = selectedPeer else {
-            lastError = previewBlockedReason ?? "Can’t preview yet."
+        guard canStart, let peer = selectedPeer else {
+            lastError = startBlockedReason ?? "Can’t inventory yet."
             return
         }
         statusMessage = "Asking \(peer.displayName) for file inventory…"
@@ -415,12 +408,12 @@ final class AppModel: ObservableObject {
                     self.selectedPreviewPath = summary.items.first?.relativePath
                     self.phase = .previewReady
                     self.statusMessage =
-                        "Preview ready — \(summary.copy) copy, \(summary.update) update, \(summary.unchanged) unchanged, \(summary.keepBoth) keep both, \(summary.skip) skip"
+                        "Inventory ready — \(summary.copy) copy, \(summary.update) update, \(summary.unchanged) unchanged, \(summary.keepBoth) keep both, \(summary.skip) skip"
                 }
             } catch {
                 await MainActor.run {
                     self.lastError = error.localizedDescription
-                    self.statusMessage = "Preview failed — \(error.localizedDescription)"
+                    self.statusMessage = "Inventory failed — \(error.localizedDescription)"
                 }
             }
         }
@@ -429,6 +422,7 @@ final class AppModel: ObservableObject {
     func dismissTransferSummary(keepPeer: Bool = false) {
         lastTransferSummary = nil
         progressFraction = 0
+        peerDockApps = []
         if keepPeer, selectedPeerID != nil {
             phase = .browsingOffers
             statusMessage = "Choose folders to transfer."
@@ -436,6 +430,7 @@ final class AppModel: ObservableObject {
             selectedPeerID = nil
             selectedOfferNames = []
             peerOffers = []
+            peerDockApps = []
             phase = .needsConnect
             statusMessage = "Connect to another Mac to choose what to transfer."
         }
@@ -616,8 +611,18 @@ final class AppModel: ObservableObject {
 
         let catalog = OfferCatalogResponsePayload(
             displayName: Host.current().localizedName ?? "Watari Mac",
-            roots: SourceOffer.catalog(displayRoots: catalogRoots, index: fileIndex)
+            roots: SourceOffer.catalog(displayRoots: catalogRoots, index: fileIndex),
+            dockApps: DockReader.currentApps()
         )
+        let catalogRootsCopy = catalogRoots
+        let fileIndexSnapshot = fileIndex
+        let catalogProvider: @Sendable () -> OfferCatalogResponsePayload = {
+            OfferCatalogResponsePayload(
+                displayName: Host.current().localizedName ?? "Watari Mac",
+                roots: SourceOffer.catalog(displayRoots: catalogRootsCopy, index: fileIndexSnapshot),
+                dockApps: DockReader.currentApps()
+            )
+        }
 
         guard receiveURL != nil || !offeredRoots.isEmpty else { return }
 
@@ -667,7 +672,8 @@ final class AppModel: ObservableObject {
                             self.statusMessage = "Peer disconnected. Listening for another connection."
                         }
                     }
-                }
+                },
+                offerCatalogProvider: catalogProvider
             )
         } catch {
             lastError = error.localizedDescription
@@ -716,17 +722,8 @@ final class AppModel: ObservableObject {
         isRefreshingOffers = true
         do {
             let catalog = try await transfer.fetchOfferCatalog(on: connection)
-            peerOffers = catalog.roots.sorted {
-                $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending
-            }
-            peerOfferDisplayName = catalog.displayName
-            selectedOfferNames = selectedOfferNames.intersection(Set(catalog.roots.map(\.name)))
+            applyOfferCatalog(catalog)
             isRefreshingOffers = false
-            if catalog.roots.isEmpty {
-                statusMessage = "\(catalog.displayName) isn’t offering folders yet. On that Mac, enable Listen and offer folders."
-            } else {
-                statusMessage = "Connected to \(catalog.displayName). Choose folders to transfer here."
-            }
         } catch {
             isRefreshingOffers = false
             lastError = error.localizedDescription

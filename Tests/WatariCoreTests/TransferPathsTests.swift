@@ -111,13 +111,33 @@ struct TransferPathsTests {
 
         let catalog = OfferCatalogResponsePayload(
             displayName: "MacBook",
-            roots: [OfferedRoot(name: "Documents", path: "/Users/a/Documents", totalBytes: 100, entryCount: 3)]
+            roots: [OfferedRoot(name: "Documents", path: "/Users/a/Documents", totalBytes: 100, entryCount: 3)],
+            dockApps: [DockAppOffer(bundlePath: "/System/Applications/Safari.app", displayName: "Safari")]
         )
         var resp = try TransferCodec.encodeJSON(.offerCatalogResponse, catalog)
         let rFrame = try TransferCodec.decode(from: &resp)
         let decoded = try TransferCodec.decodeJSON(rFrame!, as: OfferCatalogResponsePayload.self)
         #expect(decoded.roots.first?.name == "Documents")
         #expect(decoded.roots.first?.totalBytes == 100)
+        #expect(decoded.dockApps.first?.displayName == "Safari")
+
+        // Older peers without dockApps still decode.
+        struct LegacyCatalog: Encodable {
+            var displayName: String
+            var roots: [OfferedRoot]
+        }
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        let legacyData = try encoder.encode(
+            LegacyCatalog(
+                displayName: "Old",
+                roots: [OfferedRoot(name: "Desktop", path: "/Users/a/Desktop", totalBytes: 1, entryCount: 1)]
+            )
+        )
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        let legacyDecoded = try decoder.decode(OfferCatalogResponsePayload.self, from: legacyData)
+        #expect(legacyDecoded.dockApps.isEmpty)
 
         var pull = try TransferCodec.encodeJSON(
             .pullRequest,
