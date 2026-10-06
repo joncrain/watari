@@ -20,7 +20,7 @@ final class AppModel: ObservableObject {
     @Published var receiveFolder: BookmarkEntry?
     @Published var peers: [PeerRecord] = []
     @Published var selectedPeerID: PeerRecord.ID?
-    @Published var preview: PreviewSummary?
+    @Published var previewSummary: PreviewSummary?
     @Published var selectedPreviewPath: String?
     @Published var policy: PermissionPolicy = .default
     @Published var conflict: ConflictPolicy = .default
@@ -61,7 +61,7 @@ final class AppModel: ObservableObject {
     var canPreview: Bool { !folderBookmarks.isEmpty && selectedPeerID != nil && phase != .copying }
     var canStart: Bool { phase == .previewReady }
     var canStop: Bool { phase == .copying }
-    var exceptionCount: Int { preview?.permissionExceptionCount ?? 0 }
+    var exceptionCount: Int { previewSummary?.permissionExceptionCount ?? 0 }
 
     var selectedPeer: PeerRecord? {
         peers.first { $0.id == selectedPeerID }
@@ -69,7 +69,7 @@ final class AppModel: ObservableObject {
 
     var selectedPreviewItem: PreviewItem? {
         guard let path = selectedPreviewPath else { return nil }
-        return preview?.items.first { $0.relativePath == path }
+        return previewSummary?.items.first { $0.relativePath == path }
     }
 
     init() {
@@ -109,7 +109,7 @@ final class AppModel: ObservableObject {
             }
             folderBookmarks.append(entry)
             libraryWarning = Denylist().warningForSelectingLibraryRoot(url.path)
-            preview = nil
+            previewSummary = nil
             peerDestinations = [:]
             peerInventoryAvailable = false
             if selectedPeerID == nil {
@@ -130,7 +130,7 @@ final class AppModel: ObservableObject {
             persistIndex()
         }
         folderBookmarks.removeAll { $0.id == id }
-        preview = nil
+        previewSummary = nil
         peerDestinations = [:]
         if folderBookmarks.isEmpty {
             phase = .noFolders
@@ -144,7 +144,7 @@ final class AppModel: ObservableObject {
             let updated = try bookmarkStore.reauthorize(entry: folderBookmarks[index])
             folderBookmarks[index] = updated
             statusMessage = "Re-authorized \(updated.displayName)."
-            preview = nil
+            previewSummary = nil
             phase = selectedPeerID == nil ? .waitingForPeer : .waitingForPeer
         } catch {
             lastError = error.localizedDescription
@@ -154,8 +154,8 @@ final class AppModel: ObservableObject {
     func exportExceptionLog() {
         let peerId = selectedPeer?.id ?? "none"
         let log: JobLog
-        if let preview {
-            log = JobLog.fromPreview(preview, jobId: UUID().uuidString, peerId: peerId)
+        if let previewSummary {
+            log = JobLog.fromPreview(previewSummary, jobId: UUID().uuidString, peerId: peerId)
         } else {
             log = jobLog
         }
@@ -266,7 +266,7 @@ final class AppModel: ObservableObject {
                 await MainActor.run {
                     self.peerDestinations = destinations
                     self.peerInventoryAvailable = inventoryOK
-                    self.preview = summary
+                    self.previewSummary = summary
                     self.jobLog = log
                     self.selectedPreviewPath = summary.items.first?.relativePath
                     self.phase = .previewReady
@@ -309,7 +309,7 @@ final class AppModel: ObservableObject {
                     connector: peerConnector,
                     applier: permissionApplier,
                     bookmarkStore: bookmarkStore
-                ) { [weak self] fraction, message in
+                ) { @Sendable [weak self] fraction, message in
                     Task { @MainActor in
                         self?.progressFraction = fraction
                         if let message { self?.statusMessage = message }

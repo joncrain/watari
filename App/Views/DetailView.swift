@@ -122,7 +122,7 @@ struct DetailView: View {
 
     private var previewList: some View {
         List(selection: $model.selectedPreviewPath) {
-            if let preview = model.preview {
+            if let preview = model.previewSummary {
                 Section("Preview") {
                     LabeledContent("Copy", value: "\(preview.copy)")
                     LabeledContent("Update", value: "\(preview.update)")

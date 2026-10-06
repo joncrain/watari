@@ -20,8 +20,8 @@ final class JobListener: @unchecked Sendable {
         port: Int,
         destinationRoot: URL,
         applier: PermissionApplier,
-        onIndexUpdate: @escaping ([FileMetadata]) -> Void,
-        onError: @escaping (String) -> Void
+        onIndexUpdate: @escaping @Sendable ([FileMetadata]) -> Void,
+        onError: @escaping @Sendable (String) -> Void
     ) throws {
         stop()
         guard let nwPort = NWEndpoint.Port(rawValue: UInt16(port)) else {

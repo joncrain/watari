@@ -70,8 +70,9 @@ final class PermissionApplier: Sendable {
         var exceptions = applied.exceptions
         if policy.remapOwnerToReceivingUser {
             let actualUID: UInt32?
-            if let number = try? url.resourceValues(forKeys: [.fileOwnerAccountIDKey]).fileOwnerAccountID {
-                actualUID = UInt32(truncating: number)
+            var st = stat()
+            if stat(url.path, &st) == 0 {
+                actualUID = UInt32(st.st_uid)
             } else {
                 actualUID = nil
             }

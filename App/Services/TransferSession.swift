@@ -62,7 +62,7 @@ final class TransferSession: @unchecked Sendable {
         connector: PeerConnector,
         applier: PermissionApplier,
         bookmarkStore: BookmarkStore,
-        progress: @escaping (Double, String?) -> Void
+        progress: @escaping @Sendable (Double, String?) -> Void
     ) async throws {
         cancelled = false
         let connection = try await connector.openTLS(to: peer)
@@ -160,8 +160,8 @@ final class TransferSession: @unchecked Sendable {
         identityKey: Data,
         displayName: String,
         applier: PermissionApplier,
-        onIndexUpdate: @escaping ([FileMetadata]) -> Void,
-        progress: @escaping (Double, String?) -> Void
+        onIndexUpdate: @escaping @Sendable ([FileMetadata]) -> Void,
+        progress: @escaping @Sendable (Double, String?) -> Void
     ) async throws {
         cancelled = false
         let frames = FrameBuffer()
@@ -246,8 +246,8 @@ final class TransferSession: @unchecked Sendable {
         policy: PermissionPolicy,
         conflict: ConflictPolicy = .default,
         applier: PermissionApplier,
-        onIndexUpdate: (([FileMetadata]) -> Void)? = nil,
-        progress: @escaping (Double, String?) -> Void
+        onIndexUpdate: (@Sendable ([FileMetadata]) -> Void)? = nil,
+        progress: @escaping @Sendable (Double, String?) -> Void
     ) async throws {
         _ = conflict
         try await receiveJob(
@@ -269,8 +269,8 @@ final class TransferSession: @unchecked Sendable {
         destinationRoot: URL,
         policy: PermissionPolicy = .default,
         applier: PermissionApplier,
-        onIndexUpdate: @escaping ([FileMetadata]) -> Void,
-        progress: @escaping (Double, String?) -> Void
+        onIndexUpdate: @escaping @Sendable ([FileMetadata]) -> Void,
+        progress: @escaping @Sendable (Double, String?) -> Void
     ) async throws {
         cancelled = false
         var expectedFiles = 0

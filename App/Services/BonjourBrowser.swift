@@ -21,11 +21,11 @@ final class BonjourBrowser: @unchecked Sendable {
         self.onUpdate = onUpdate
         let descriptor = NWBrowser.Descriptor.bonjour(type: Self.serviceType, domain: nil)
         let browser = NWBrowser(for: descriptor, using: .tcp)
-        browser.stateUpdateHandler = { [weak self] _, new in
+        browser.browseResultsChangedHandler = { [weak self] results, _ in
             guard let self else { return }
             var peers: [BonjourPeer] = []
-            for result in new {
-                if case let .service(name, _, _, _) = result.endpoint {
+            for result in results {
+                if case let .service(name: name, type: _, domain: _, interface: _) = result.endpoint {
                     // Resolve happens on connect; advertise name for UI selection.
                     peers.append(BonjourPeer(name: name, host: name, port: 0))
                 }
