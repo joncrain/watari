@@ -19,6 +19,8 @@ targets:
     platform: macOS
     sources:
       - path: App
+    resources:
+      - path: Resources/AppIcon.icns
     dependencies:
       - package: Watari
         product: WatariCore
