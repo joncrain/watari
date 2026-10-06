@@ -3,23 +3,34 @@ import Foundation
 import SwiftUI
 import UniformTypeIdentifiers
 import WatariCore
+import os.log
+
+private let modelLog = Logger(subsystem: "app.watari.mac", category: "AppModel")
 
 @MainActor
 final class AppModel: ObservableObject {
     enum Phase: Equatable {
-        case noFolders
-        case waitingForPeer
+        /// Destination-primary: connect to a source Mac first.
+        case needsConnect
+        /// Peer connected; browsing their offered folder catalog.
+        case browsingOffers
         case previewReady
         case copying
         case finishedWithExceptions
         case peerGone
     }
 
-    @Published var phase: Phase = .noFolders
-    @Published var folderBookmarks: [BookmarkEntry] = []
+    @Published var phase: Phase = .needsConnect
+    /// Folders this Mac offers when acting as source (whitelist + optional Settings adds).
+    @Published var offeredFolders: [BookmarkEntry] = []
     @Published var receiveFolder: BookmarkEntry?
     @Published var peers: [PeerRecord] = []
     @Published var selectedPeerID: PeerRecord.ID?
+    /// Catalog from the connected source peer.
+    @Published var peerOffers: [OfferedRoot] = []
+    @Published var peerOfferDisplayName: String = ""
+    /// Display names selected from `peerOffers` to pull.
+    @Published var selectedOfferNames: Set<String> = []
     @Published var previewSummary: PreviewSummary?
     @Published var selectedPreviewPath: String?
     @Published var policy: PermissionPolicy = .default
@@ -27,13 +38,14 @@ final class AppModel: ObservableObject {
     @Published var dlp: DLPPolicy = ManagedDefaults.dlpPolicy()
     @Published var network: NetworkConfig = .default
     @Published var jobLog = JobLog()
-    @Published var statusMessage: String = "Select folders to begin."
+    @Published var statusMessage: String = "Connect to another Mac to choose what to transfer."
     @Published var progressFraction: Double = 0
     @Published var showConnectSheet = false
     @Published var libraryWarning: String?
     @Published var lastError: String?
     @Published var indexedBytes: UInt64 = 0
     @Published var peerInventoryAvailable = false
+    @Published var isRefreshingOffers = false
 
     let bookmarkStore = BookmarkStore()
     let peerConnector = PeerConnector()
@@ -49,8 +61,9 @@ final class AppModel: ObservableObject {
     }()
 
     private var fileIndex = LocalFileIndex()
-    private var peerDestinations: [String: FileMetadata] = [:]
+    private var peerSourceEntries: [FileMetadata] = []
     private var receiveAccessURL: URL?
+    private var offeredAccessURLs: [URL] = []
     private let indexURL: URL = {
         let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
             ?? FileManager.default.temporaryDirectory
@@ -58,8 +71,15 @@ final class AppModel: ObservableObject {
             .appendingPathComponent("local-index.json")
     }()
 
-    var canPreview: Bool { !folderBookmarks.isEmpty && selectedPeerID != nil && phase != .copying }
-    var canStart: Bool { phase == .previewReady }
+    var canPreview: Bool {
+        selectedPeerID != nil
+            && !selectedOfferNames.isEmpty
+            && receiveFolder != nil
+            && phase != .copying
+            && phase != .needsConnect
+    }
+
+    var canStart: Bool { phase == .previewReady && receiveFolder != nil }
     var canStop: Bool { phase == .copying }
     var exceptionCount: Int { previewSummary?.permissionExceptionCount ?? 0 }
 
@@ -72,77 +92,154 @@ final class AppModel: ObservableObject {
         return previewSummary?.items.first { $0.relativePath == path }
     }
 
+    var selectedOfferBytes: UInt64 {
+        peerOffers
+            .filter { selectedOfferNames.contains($0.name) }
+            .reduce(UInt64(0)) { $0 + $1.totalBytes }
+    }
+
     init() {
         if let loaded = try? LocalFileIndex.load(from: indexURL) {
             fileIndex = loaded
             indexedBytes = loaded.totalBytes()
         }
+        bootstrapOfferedWhitelist()
     }
 
-    func addFolder() {
-        guard let url = bookmarkStore.pickFolder() else { return }
-        ingestFolder(url)
+    // MARK: - Destination: peer offers
+
+    func isOfferSelected(_ name: String) -> Bool {
+        selectedOfferNames.contains(name)
     }
 
-    func addConvenience(_ target: ConvenienceTarget) {
-        guard let url = bookmarkStore.pickConvenience(target) else { return }
-        ingestFolder(url)
-    }
-
-    func isFolderSelected(path: String) -> Bool {
-        folderBookmarks.contains { $0.path == path }
-    }
-
-    /// Toggle a whitelist folder into the job. Checkbox UX only — no open panel.
-    func setFolderSelected(_ selected: Bool, url: URL, surfaceError: Bool = true) {
+    func setOfferSelected(_ selected: Bool, name: String) {
         if selected {
-            if isFolderSelected(path: url.path) { return }
+            selectedOfferNames.insert(name)
+        } else {
+            selectedOfferNames.remove(name)
+        }
+        previewSummary = nil
+        if phase == .previewReady || phase == .finishedWithExceptions {
+            phase = .browsingOffers
+            statusMessage = "Selection changed. Run Preview again."
+        }
+    }
+
+    func setOffersSelected(_ selected: Bool, names: [String]) {
+        if selected {
+            selectedOfferNames.formUnion(names)
+        } else {
+            selectedOfferNames.subtract(names)
+        }
+        previewSummary = nil
+        if phase == .previewReady || phase == .finishedWithExceptions {
+            phase = .browsingOffers
+        }
+    }
+
+    func refreshPeerOffers() {
+        guard let peer = selectedPeer else { return }
+        isRefreshingOffers = true
+        statusMessage = "Asking \(peer.displayName) for offered folders…"
+        Task {
+            do {
+                let catalog = try await transfer.fetchOfferCatalog(peer: peer, connector: peerConnector)
+                await MainActor.run {
+                    self.peerOffers = catalog.roots.sorted {
+                        $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending
+                    }
+                    self.peerOfferDisplayName = catalog.displayName
+                    self.selectedOfferNames = self.selectedOfferNames.intersection(Set(catalog.roots.map(\.name)))
+                    self.phase = .browsingOffers
+                    self.isRefreshingOffers = false
+                    if catalog.roots.isEmpty {
+                        self.statusMessage = "\(catalog.displayName) isn’t offering folders yet. On that Mac, enable Listen and offer folders in Settings."
+                    } else {
+                        self.statusMessage = "Connected to \(catalog.displayName). Choose folders to transfer here."
+                    }
+                }
+            } catch {
+                await MainActor.run {
+                    self.isRefreshingOffers = false
+                    self.lastError = error.localizedDescription
+                    self.statusMessage = "Couldn’t load offered folders — \(error.localizedDescription)"
+                    modelLog.error("offer catalog failed: \(error.localizedDescription, privacy: .public)")
+                }
+            }
+        }
+    }
+
+    // MARK: - Source: offer folders on this Mac
+
+    /// Ensure default whitelist folders are offered (no open panel).
+    func bootstrapOfferedWhitelist() {
+        let home = bookmarkStore.homeDirectory
+        for name in TransferNode.allowedNames {
+            let url = home.appendingPathComponent(name, isDirectory: true)
+            if offeredFolders.contains(where: { $0.path == url.path }) { continue }
             do {
                 let entry = try bookmarkStore.bookmarkWhitelistedFolder(url)
-                ingestEntry(entry)
+                offeredFolders.append(entry)
             } catch {
-                NSLog("Watari: failed to select %@: %@", url.path, error.localizedDescription)
-                if surfaceError {
-                    lastError = error.localizedDescription
-                }
+                modelLog.info("Skip offering \(name, privacy: .public): \(error.localizedDescription, privacy: .public)")
             }
-        } else if let entry = folderBookmarks.first(where: { $0.path == url.path }) {
-            removeFolder(entry.id)
+        }
+        reindexOfferedFolders()
+    }
+
+    /// Settings escape hatch: offer an extra folder from this Mac (source role).
+    func addOfferedFolder() {
+        guard let url = bookmarkStore.pickFolder(
+            message: "Choose a folder this Mac should offer to connected peers."
+        ) else { return }
+        do {
+            let entry = try bookmarkStore.save(url: url)
+            if offeredFolders.contains(where: { $0.path == entry.path }) {
+                statusMessage = "\(entry.displayName) is already offered."
+                return
+            }
+            offeredFolders.append(entry)
+            libraryWarning = Denylist().warningForSelectingLibraryRoot(entry.path)
+            reindexOfferedFolders()
+            refreshListener()
+            statusMessage = "Offering \(entry.displayName) to peers."
+        } catch {
+            lastError = error.localizedDescription
         }
     }
 
-    /// Select or clear several whitelist folders; suppresses per-folder alert spam.
-    func setFoldersSelected(_ selected: Bool, urls: [URL]) {
-        if selected {
-            var failed: [String] = []
-            for url in urls where !isFolderSelected(path: url.path) {
-                do {
-                    let entry = try bookmarkStore.bookmarkWhitelistedFolder(url)
-                    ingestEntry(entry)
-                } catch {
-                    NSLog("Watari: failed to select %@: %@", url.path, error.localizedDescription)
-                    failed.append(url.lastPathComponent)
-                }
-            }
-            if !failed.isEmpty {
-                let list = failed.joined(separator: ", ")
-                statusMessage = "Couldn’t select \(list)."
-                // Only alert when nothing was selected.
-                if folderBookmarks.isEmpty {
-                    lastError = "Couldn’t select \(list)."
-                }
-            }
-        } else {
-            for url in urls {
-                if let entry = folderBookmarks.first(where: { $0.path == url.path }) {
-                    removeFolder(entry.id)
-                }
+    func removeOfferedFolder(_ id: BookmarkEntry.ID) {
+        if let entry = offeredFolders.first(where: { $0.id == id }) {
+            fileIndex.roots.removeValue(forKey: entry.path)
+            persistIndex()
+        }
+        offeredFolders.removeAll { $0.id == id }
+        refreshListener()
+    }
+
+    func reindexOfferedFolders() {
+        for folder in offeredFolders {
+            do {
+                let access = try bookmarkStore.startAccessRefreshing(folder)
+                defer { bookmarkStore.stopAccess(to: access.url) }
+                let scanned = try FileScanner.scan(
+                    root: access.url,
+                    displayRoot: access.entry.displayName,
+                    denylist: Denylist(),
+                    hashContents: false
+                )
+                fileIndex.replace(rootPath: access.entry.path, metadata: scanned.entries)
+            } catch {
+                modelLog.error("Index failed for \(folder.path, privacy: .public): \(error.localizedDescription, privacy: .public)")
             }
         }
+        persistIndex()
     }
 
     func chooseReceiveFolder() {
-        guard let url = bookmarkStore.pickFolder() else { return }
+        guard let url = bookmarkStore.pickFolder(
+            message: "Choose where transferred folders should arrive on this Mac."
+        ) else { return }
         do {
             receiveFolder = try bookmarkStore.save(url: url)
             refreshListener()
@@ -152,56 +249,14 @@ final class AppModel: ObservableObject {
         }
     }
 
-    private func ingestFolder(_ url: URL) {
-        do {
-            let entry = try bookmarkStore.save(url: url)
-            ingestEntry(entry)
-        } catch {
-            lastError = error.localizedDescription
-        }
-    }
-
-    private func ingestEntry(_ entry: BookmarkEntry) {
-        if folderBookmarks.contains(where: { $0.path == entry.path }) {
-            statusMessage = "\(entry.displayName) is already in this job."
-            return
-        }
-        folderBookmarks.append(entry)
-        libraryWarning = Denylist().warningForSelectingLibraryRoot(entry.path)
-        previewSummary = nil
-        peerDestinations = [:]
-        peerInventoryAvailable = false
-        if selectedPeerID == nil {
-            phase = .waitingForPeer
-            statusMessage = "Folder selected. Connect a peer to continue."
-        } else {
-            phase = .waitingForPeer
-            statusMessage = "Run Preview to see what will copy."
-        }
-    }
-
-    func removeFolder(_ id: BookmarkEntry.ID) {
-        if let entry = folderBookmarks.first(where: { $0.id == id }) {
-            fileIndex.roots.removeValue(forKey: entry.path)
-            persistIndex()
-        }
-        folderBookmarks.removeAll { $0.id == id }
-        previewSummary = nil
-        peerDestinations = [:]
-        if folderBookmarks.isEmpty {
-            phase = .noFolders
-            statusMessage = "Select folders to begin."
-        }
-    }
-
     func reauthorizeFolder(_ id: BookmarkEntry.ID) {
-        guard let index = folderBookmarks.firstIndex(where: { $0.id == id }) else { return }
+        guard let index = offeredFolders.firstIndex(where: { $0.id == id }) else { return }
         do {
-            let updated = try bookmarkStore.reauthorize(entry: folderBookmarks[index])
-            folderBookmarks[index] = updated
+            let updated = try bookmarkStore.reauthorize(entry: offeredFolders[index])
+            offeredFolders[index] = updated
             statusMessage = "Re-authorized \(updated.displayName)."
-            previewSummary = nil
-            phase = selectedPeerID == nil ? .waitingForPeer : .waitingForPeer
+            reindexOfferedFolders()
+            refreshListener()
         } catch {
             lastError = error.localizedDescription
         }
@@ -234,81 +289,46 @@ final class AppModel: ObservableObject {
         }
     }
 
-    @discardableResult
-    private func refreshFolderBookmarks() throws -> Bool {
-        var any = false
-        for i in folderBookmarks.indices {
-            let result = try bookmarkStore.refreshIfStale(folderBookmarks[i])
-            if result.didRefresh {
-                folderBookmarks[i] = result.entry
-                any = true
-            }
-        }
-        if let receive = receiveFolder {
-            let result = try bookmarkStore.refreshIfStale(receive)
-            if result.didRefresh {
-                receiveFolder = result.entry
-                any = true
-            }
-        }
-        return any
-    }
+    // MARK: - Preview / pull
 
     func preview() {
-        guard canPreview, let peer = selectedPeer else { return }
-        statusMessage = "Scanning and asking peer for inventory…"
+        guard canPreview, let peer = selectedPeer else {
+            if receiveFolder == nil {
+                lastError = "Choose a receive folder in Settings before Preview."
+            }
+            return
+        }
+        statusMessage = "Asking \(peer.displayName) for file inventory…"
+        let rootNames = Array(selectedOfferNames).sorted()
         let conflictPolicy = conflict
         let permissionPolicy = policy
         let dlpPolicy = dlp
         Task {
             do {
-                let refreshed = try await MainActor.run { () -> Bool in
-                    try self.refreshFolderBookmarks()
-                }
-                let folders = await MainActor.run { self.folderBookmarks }
-                var sources: [FileMetadata] = []
-                var skipped: [(path: String, reason: SkipReason)] = []
-                for folder in folders {
-                    let access = try bookmarkStore.startAccessRefreshing(folder)
-                    defer { bookmarkStore.stopAccess(to: access.url) }
-                    if access.didRefresh {
-                        await MainActor.run {
-                            if let idx = self.folderBookmarks.firstIndex(where: { $0.id == access.entry.id }) {
-                                self.folderBookmarks[idx] = access.entry
-                            }
-                        }
-                    }
-                    let scanned = try FileScanner.scan(
-                        root: access.url,
-                        displayRoot: access.entry.displayName,
-                        denylist: Denylist()
-                    )
-                    sources.append(contentsOf: scanned.entries)
-                    skipped.append(contentsOf: scanned.skipped)
-                    fileIndex.replace(rootPath: access.entry.path, metadata: scanned.entries)
-                }
-                await MainActor.run { self.persistIndex() }
+                let sources = try await transfer.fetchInventory(
+                    rootNames: rootNames,
+                    peer: peer,
+                    connector: peerConnector
+                )
 
                 var destinations: [String: FileMetadata] = [:]
-                var inventoryOK = false
-                do {
-                    let entries = try await transfer.fetchInventory(
-                        rootNames: folders.map(\.displayName),
-                        peer: peer,
-                        connector: peerConnector
+                var inventoryOK = true
+                if let receive = await MainActor.run(body: { self.receiveFolder }) {
+                    let access = try bookmarkStore.startAccessRefreshing(receive)
+                    defer { bookmarkStore.stopAccess(to: access.url) }
+                    let local = try DestinationInventory.scan(
+                        destinationRoot: access.url,
+                        rootNames: rootNames,
+                        denylist: Denylist()
                     )
-                    destinations = InventoryResponsePayload(entries: entries).asDestinationMap
-                    inventoryOK = true
-                } catch {
-                    // Peer offline / old peer — Preview still runs with empty destinations.
-                    inventoryOK = false
+                    destinations = InventoryResponsePayload(entries: local).asDestinationMap
                 }
 
                 let receiving = permissionApplier.currentIdentity()
                 let summary = PreviewDiff.build(
                     sources: sources,
                     destinations: destinations,
-                    skipped: skipped,
+                    skipped: [],
                     policy: permissionPolicy,
                     conflict: conflictPolicy,
                     dlp: dlpPolicy,
@@ -320,16 +340,14 @@ final class AppModel: ObservableObject {
                     peerId: peer.id
                 )
                 await MainActor.run {
-                    self.peerDestinations = destinations
+                    self.peerSourceEntries = sources
                     self.peerInventoryAvailable = inventoryOK
                     self.previewSummary = summary
                     self.jobLog = log
                     self.selectedPreviewPath = summary.items.first?.relativePath
                     self.phase = .previewReady
-                    let inv = inventoryOK ? "peer inventory" : "local only (peer inventory unavailable)"
-                    let refreshNote = refreshed ? " · refreshed folder access" : ""
                     self.statusMessage =
-                        "Preview ready (\(inv)) — \(summary.copy) copy, \(summary.update) update, \(summary.unchanged) unchanged, \(summary.keepBoth) keep both, \(summary.skip) skip · \(ByteCountFormatter.string(fromByteCount: Int64(self.indexedBytes), countStyle: .file)) indexed\(refreshNote)"
+                        "Preview ready — \(summary.copy) copy, \(summary.update) update, \(summary.unchanged) unchanged, \(summary.keepBoth) keep both, \(summary.skip) skip"
                 }
             } catch {
                 await MainActor.run {
@@ -341,30 +359,45 @@ final class AppModel: ObservableObject {
     }
 
     func start() {
-        guard canStart, let peer = selectedPeer else { return }
-        do {
-            _ = try refreshFolderBookmarks()
-        } catch {
-            lastError = error.localizedDescription
+        guard canStart, let peer = selectedPeer, let receive = receiveFolder else {
+            if receiveFolder == nil {
+                lastError = "Choose a receive folder in Settings before starting."
+            }
             return
         }
+        let rootNames = Array(selectedOfferNames).sorted()
         phase = .copying
-        statusMessage = "Copying to \(peer.displayName)…"
+        statusMessage = "Pulling from \(peer.displayName)…"
         progressFraction = 0
         let conflictPolicy = conflict
-        let destinations = peerDestinations
+        let permissionPolicy = policy
         Task {
             do {
-                try await transfer.run(
-                    folders: folderBookmarks,
+                let access = try bookmarkStore.startAccessRefreshing(receive)
+                defer { bookmarkStore.stopAccess(to: access.url) }
+                if access.didRefresh {
+                    await MainActor.run { self.receiveFolder = access.entry }
+                }
+                let receivePath = access.entry.path
+                try await transfer.pull(
+                    rootNames: rootNames,
                     peer: peer,
-                    policy: policy,
+                    policy: permissionPolicy,
                     conflict: conflictPolicy,
-                    destinations: destinations,
-                    network: network,
+                    receiveRoot: access.url,
                     connector: peerConnector,
                     applier: permissionApplier,
-                    bookmarkStore: bookmarkStore
+                    onIndexUpdate: { [weak self] received in
+                        Task { @MainActor in
+                            guard let self else { return }
+                            ReceiveIndex.upsert(
+                                &self.fileIndex,
+                                destinationRootPath: receivePath,
+                                received: received
+                            )
+                            self.persistIndex()
+                        }
+                    }
                 ) { @Sendable [weak self] fraction, message in
                     Task { @MainActor in
                         self?.progressFraction = fraction
@@ -408,13 +441,9 @@ final class AppModel: ObservableObject {
         peers.append(peer)
         selectedPeerID = peer.id
         showConnectSheet = false
-        if folderBookmarks.isEmpty {
-            phase = .noFolders
-            statusMessage = "Peer saved. Select folders to begin."
-        } else {
-            phase = .waitingForPeer
-            statusMessage = "Peer connected. Run Preview."
-        }
+        phase = .browsingOffers
+        statusMessage = "Peer connected. Loading offered folders…"
+        refreshPeerOffers()
     }
 
     func refreshListener() {
@@ -423,24 +452,64 @@ final class AppModel: ObservableObject {
             bookmarkStore.stopAccess(to: receiveAccessURL)
             self.receiveAccessURL = nil
         }
-        guard network.listenEnabled, let receive = receiveFolder else { return }
-        do {
-            let access = try bookmarkStore.startAccessRefreshing(receive)
-            if access.didRefresh {
-                receiveFolder = access.entry
+        for url in offeredAccessURLs {
+            bookmarkStore.stopAccess(to: url)
+        }
+        offeredAccessURLs = []
+
+        guard network.listenEnabled else { return }
+
+        var receiveURL: URL?
+        if let receive = receiveFolder {
+            do {
+                let access = try bookmarkStore.startAccessRefreshing(receive)
+                if access.didRefresh {
+                    receiveFolder = access.entry
+                }
+                receiveAccessURL = access.url
+                receiveURL = access.url
+            } catch {
+                lastError = error.localizedDescription
             }
-            receiveAccessURL = access.url
-            let receivePath = access.entry.path
+        }
+
+        var offeredRoots: [String: URL] = [:]
+        var catalogRoots: [(name: String, path: String)] = []
+        for folder in offeredFolders {
+            do {
+                let access = try bookmarkStore.startAccessRefreshing(folder)
+                if access.didRefresh,
+                   let idx = offeredFolders.firstIndex(where: { $0.id == access.entry.id }) {
+                    offeredFolders[idx] = access.entry
+                }
+                offeredAccessURLs.append(access.url)
+                offeredRoots[access.entry.displayName] = access.url
+                catalogRoots.append((access.entry.displayName, access.entry.path))
+            } catch {
+                modelLog.error("Offer root unavailable \(folder.path, privacy: .public): \(error.localizedDescription, privacy: .public)")
+            }
+        }
+
+        let catalog = OfferCatalogResponsePayload(
+            displayName: Host.current().localizedName ?? "Watari Mac",
+            roots: SourceOffer.catalog(displayRoots: catalogRoots, index: fileIndex)
+        )
+
+        guard receiveURL != nil || !offeredRoots.isEmpty else { return }
+
+        do {
             try jobListener.start(
                 port: network.listenPort,
-                destinationRoot: access.url,
+                receiveRoot: receiveURL,
+                offeredRoots: offeredRoots,
+                offerCatalog: catalog,
                 applier: permissionApplier,
                 onIndexUpdate: { [weak self] received in
                     Task { @MainActor in
-                        guard let self else { return }
+                        guard let self, let receive = self.receiveFolder else { return }
                         ReceiveIndex.upsert(
                             &self.fileIndex,
-                            destinationRootPath: receivePath,
+                            destinationRootPath: receive.path,
                             received: received
                         )
                         self.persistIndex()

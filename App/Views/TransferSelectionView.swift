@@ -1,32 +1,19 @@
 import AppKit
 import SwiftUI
+import WatariCore
 
-/// Migration Assistant–style transfer picker: title, one bordered tree, footer summary.
+/// Destination-primary folder picker: peer offered roots after connect.
 struct TransferSelectionView: View {
     @EnvironmentObject private var model: AppModel
-    @StateObject private var sizes = FolderSizeStore()
-
-    private var userName: String {
-        let full = NSFullUserName()
-        return full.isEmpty ? NSUserName() : full
-    }
-
-    private var homeURL: URL {
-        FileManager.default.homeDirectoryForCurrentUser
-    }
-
-    private var folderNodes: [TransferNode] {
-        TransferNode.homeFolders(of: homeURL)
-    }
-
-    private var selectedBytes: UInt64 {
-        model.folderBookmarks.reduce(UInt64(0)) { partial, entry in
-            partial + (sizes.bytes(for: entry.path) ?? 0)
-        }
-    }
 
     private var availableBytes: UInt64? {
-        sizes.volumeFreeBytes
+        let path = model.receiveFolder?.path
+            ?? FileManager.default.homeDirectoryForCurrentUser.path
+        if let attrs = try? FileManager.default.attributesOfFileSystem(forPath: path),
+           let free = attrs[.systemFreeSize] as? NSNumber {
+            return free.uint64Value
+        }
+        return nil
     }
 
     var body: some View {
@@ -44,6 +31,13 @@ struct TransferSelectionView: View {
                     .padding(.top, 6)
                     .padding(.horizontal, 32)
 
+                if model.receiveFolder == nil {
+                    Text("Choose a receive folder in Settings before Preview or Start.")
+                        .font(.caption)
+                        .foregroundStyle(.orange)
+                        .padding(.top, 8)
+                }
+
                 if let warning = model.libraryWarning {
                     Text(warning)
                         .font(.caption)
@@ -53,20 +47,26 @@ struct TransferSelectionView: View {
                         .padding(.horizontal, 32)
                 }
 
-                // Folders — files only (whitelist + Add folder…)
                 VStack(alignment: .leading, spacing: 8) {
                     HStack(alignment: .firstTextBaseline) {
                         Text("Folders")
                             .font(.headline)
                         Spacer()
-                        Button("Add folder…") {
-                            model.addFolder()
+                        if model.isRefreshingOffers {
+                            ProgressView()
+                                .controlSize(.small)
+                        } else {
+                            Button("Refresh") { model.refreshPeerOffers() }
+                                .help("Reload offered folders from the connected Mac")
                         }
-                        .help("Choose another folder (opens a system folder picker)")
                     }
 
-                    borderedFolderTree
-                        .frame(minHeight: 220, maxHeight: 320)
+                    Text(foldersCaption)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+
+                    borderedOfferTree
+                        .frame(minHeight: 200, maxHeight: 320)
 
                     footer
                 }
@@ -74,7 +74,6 @@ struct TransferSelectionView: View {
                 .padding(.top, 20)
                 .padding(.horizontal, 40)
 
-                // Separate transfer section — not part of the file tree
                 VStack(alignment: .leading, spacing: 8) {
                     Text("Services")
                         .font(.headline)
@@ -97,9 +96,17 @@ struct TransferSelectionView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .onAppear {
-            sizes.refreshVolumeFree()
-            sizes.estimate(paths: folderNodes.map(\.url.path))
+            if model.peerOffers.isEmpty, model.selectedPeerID != nil {
+                model.refreshPeerOffers()
+            }
         }
+    }
+
+    private var foldersCaption: String {
+        let source = model.peerOfferDisplayName.isEmpty
+            ? (model.selectedPeer?.displayName ?? "the other Mac")
+            : model.peerOfferDisplayName
+        return "From \(source). Sizes come from that Mac’s folder index."
     }
 
     private var subtitle: String {
@@ -107,72 +114,51 @@ struct TransferSelectionView: View {
         case .previewReady, .finishedWithExceptions:
             return model.statusMessage
         case .copying:
-            return "Copying selected folders…"
+            return "Transferring selected folders…"
         case .peerGone:
             return "The other Mac disconnected. Reconnect, then Preview again."
-        case .waitingForPeer:
-            return model.selectedPeerID == nil
-                ? "Select folders, then connect a peer."
-                : "Select folders, then Preview what will copy."
-        case .noFolders:
-            return "Select folders to copy to another Mac."
+        case .browsingOffers:
+            return model.statusMessage
+        case .needsConnect:
+            return "Connect to another Mac to continue."
         }
     }
 
-    private var borderedFolderTree: some View {
+    private var borderedOfferTree: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 0) {
-                TransferTreeRow(
-                    title: "Users",
-                    systemImage: "person.2.fill",
-                    trailing: sizeLabel(for: homeURL.path),
-                    depth: 0,
-                    isExpanded: $sizes.usersExpanded,
-                    canExpand: true,
-                    selection: usersSelection,
-                    enabled: true,
-                    onToggle: { selectAllWhitelistedFolders($0) }
-                )
-
-                if sizes.usersExpanded {
+                if model.peerOffers.isEmpty {
+                    Text(model.isRefreshingOffers ? "Loading offered folders…" : "No folders offered yet.")
+                        .foregroundStyle(.secondary)
+                        .padding(12)
+                } else {
                     TransferTreeRow(
-                        title: userName,
-                        systemImage: "person.crop.circle.fill",
-                        trailing: sizeLabel(for: homeURL.path),
-                        depth: 1,
-                        isExpanded: $sizes.userExpanded,
-                        canExpand: true,
-                        selection: usersSelection,
+                        title: model.peerOfferDisplayName.isEmpty ? "Source Mac" : model.peerOfferDisplayName,
+                        systemImage: "laptopcomputer",
+                        trailing: totalOffersLabel,
+                        depth: 0,
+                        isExpanded: .constant(true),
+                        canExpand: false,
+                        selection: offersSelection,
                         enabled: true,
-                        onToggle: { selectAllWhitelistedFolders($0) }
+                        onToggle: { model.setOffersSelected($0, names: model.peerOffers.map(\.name)) }
                     )
 
-                    if sizes.userExpanded {
-                        ForEach(folderNodes) { node in
-                            folderRow(node)
-                        }
-
-                        // Extra folders added via Add folder… that aren’t in the whitelist tree.
-                        ForEach(extraSelectedFolders) { entry in
-                            TransferTreeRow(
-                                title: entry.displayName,
-                                systemImage: "folder.fill",
-                                trailing: sizeLabel(for: entry.path),
-                                depth: 2,
-                                isExpanded: .constant(false),
-                                canExpand: false,
-                                selection: .on,
-                                enabled: true,
-                                onToggle: { selected in
-                                    if !selected { model.removeFolder(entry.id) }
-                                }
-                            )
-                            .contextMenu {
-                                Button("Re-authorize…") { model.reauthorizeFolder(entry.id) }
-                                Button("Remove", role: .destructive) { model.removeFolder(entry.id) }
-                            }
-                            .onAppear { sizes.estimate(paths: [entry.path]) }
-                        }
+                    ForEach(model.peerOffers) { offer in
+                        TransferTreeRow(
+                            title: offer.name,
+                            systemImage: symbol(for: offer.name),
+                            trailing: ByteCountFormatter.string(
+                                fromByteCount: Int64(offer.totalBytes),
+                                countStyle: .file
+                            ),
+                            depth: 1,
+                            isExpanded: .constant(false),
+                            canExpand: false,
+                            selection: model.isOfferSelected(offer.name) ? .on : .off,
+                            enabled: true,
+                            onToggle: { model.setOfferSelected($0, name: offer.name) }
+                        )
                     }
                 }
             }
@@ -186,31 +172,13 @@ struct TransferSelectionView: View {
         )
     }
 
-    /// Bookmarks outside the default whitelist (from Add folder…).
-    private var extraSelectedFolders: [BookmarkEntry] {
-        let whitelistPaths = Set(folderNodes.map(\.url.path))
-        return model.folderBookmarks.filter { !whitelistPaths.contains($0.path) }
-    }
-
     private var borderedServicesList: some View {
         VStack(alignment: .leading, spacing: 0) {
-            comingSoonRow(
-                title: "Services",
-                systemImage: "app.dashed",
-                detail: "Mail, Safari, and other apps"
-            )
+            comingSoonRow(title: "Services", systemImage: "app.dashed", detail: "Mail, Safari, and other apps")
             Divider().padding(.leading, 44)
-            comingSoonRow(
-                title: "Dock",
-                systemImage: "dock.rectangle",
-                detail: "Dock layout and items"
-            )
+            comingSoonRow(title: "Dock", systemImage: "dock.rectangle", detail: "Dock layout and items")
             Divider().padding(.leading, 44)
-            comingSoonRow(
-                title: "Finder",
-                systemImage: "folder",
-                detail: "Finder preferences"
-            )
+            comingSoonRow(title: "Finder", systemImage: "folder", detail: "Finder preferences")
         }
         .padding(.vertical, 4)
         .background(Color(nsColor: .textBackgroundColor))
@@ -221,34 +189,7 @@ struct TransferSelectionView: View {
         )
     }
 
-    private func folderRow(_ node: TransferNode) -> some View {
-        let path = node.url.path
-        let selected = model.isFolderSelected(path: path)
-        return TransferTreeRow(
-            title: node.name,
-            systemImage: node.systemImage,
-            trailing: sizeLabel(for: path),
-            depth: 2,
-            isExpanded: .constant(false),
-            canExpand: false,
-            selection: selected ? .on : .off,
-            enabled: true,
-            onToggle: { model.setFolderSelected($0, url: node.url) }
-        )
-        .contextMenu {
-            if selected, let entry = model.folderBookmarks.first(where: { $0.path == path }) {
-                Button("Re-authorize…") { model.reauthorizeFolder(entry.id) }
-                Button("Remove", role: .destructive) { model.removeFolder(entry.id) }
-            }
-        }
-        .onAppear { sizes.estimate(paths: [path]) }
-    }
-
-    private func comingSoonRow(
-        title: String,
-        systemImage: String,
-        detail: String
-    ) -> some View {
+    private func comingSoonRow(title: String, systemImage: String, detail: String) -> some View {
         HStack(spacing: 8) {
             Image(systemName: "square")
                 .font(.body)
@@ -258,11 +199,8 @@ struct TransferSelectionView: View {
                 .foregroundStyle(.tertiary)
                 .frame(width: 18)
             VStack(alignment: .leading, spacing: 1) {
-                Text(title)
-                    .foregroundStyle(.secondary)
-                Text(detail)
-                    .font(.caption)
-                    .foregroundStyle(.tertiary)
+                Text(title).foregroundStyle(.secondary)
+                Text(detail).font(.caption).foregroundStyle(.tertiary)
             }
             Spacer(minLength: 8)
             Text("Coming soon")
@@ -277,25 +215,19 @@ struct TransferSelectionView: View {
     }
 
     private var footer: some View {
-        let selected: String = {
-            let unknownSizes = model.folderBookmarks.contains { sizes.bytes(for: $0.path) == nil }
-            if !model.folderBookmarks.isEmpty, selectedBytes == 0, unknownSizes {
-                let n = model.folderBookmarks.count
-                return n == 1 ? "1 folder" : "\(n) folders"
-            }
-            return ByteCountFormatter.string(fromByteCount: Int64(selectedBytes), countStyle: .file)
-        }()
+        let selected = ByteCountFormatter.string(
+            fromByteCount: Int64(model.selectedOfferBytes),
+            countStyle: .file
+        )
         let available: String = {
             if let availableBytes {
                 return ByteCountFormatter.string(fromByteCount: Int64(availableBytes), countStyle: .file)
             }
             return "—"
         }()
-        let dest = model.selectedPeer?.displayName ?? "this Mac"
-        return Text("\(selected) selected to transfer. \(available) available on \(dest).")
+        return Text("\(selected) selected to transfer. \(available) available on this Mac.")
             .font(.caption)
             .foregroundStyle(.secondary)
-            .accessibilityLabel("\(selected) selected to transfer. \(available) available on \(dest).")
     }
 
     @ViewBuilder
@@ -322,22 +254,31 @@ struct TransferSelectionView: View {
         }
     }
 
-    private var usersSelection: RowSelection {
-        let nodes = folderNodes
-        guard !nodes.isEmpty else { return .off }
-        let selectedCount = nodes.filter { model.isFolderSelected(path: $0.url.path) }.count
-        if selectedCount == 0 { return .off }
-        if selectedCount == nodes.count { return .on }
+    private var offersSelection: RowSelection {
+        let names = model.peerOffers.map(\.name)
+        guard !names.isEmpty else { return .off }
+        let count = names.filter { model.isOfferSelected($0) }.count
+        if count == 0 { return .off }
+        if count == names.count { return .on }
         return .mixed
     }
 
-    private func selectAllWhitelistedFolders(_ selected: Bool) {
-        model.setFoldersSelected(selected, urls: folderNodes.map(\.url))
+    private var totalOffersLabel: String {
+        let total = model.peerOffers.reduce(UInt64(0)) { $0 + $1.totalBytes }
+        return ByteCountFormatter.string(fromByteCount: Int64(total), countStyle: .file)
     }
 
-    private func sizeLabel(for path: String) -> String {
-        guard let bytes = sizes.bytes(for: path) else { return "—" }
-        return ByteCountFormatter.string(fromByteCount: Int64(bytes), countStyle: .file)
+    private func symbol(for name: String) -> String {
+        switch name {
+        case "Documents": return "doc.fill"
+        case "Desktop": return "desktopcomputer"
+        case "Downloads": return "arrow.down.circle.fill"
+        case "Pictures": return "photo.fill"
+        case "Movies": return "film.fill"
+        case "Music": return "music.note"
+        case "Public": return "folder.fill.badge.person.crop"
+        default: return "folder.fill"
+        }
     }
 }
 
@@ -372,7 +313,6 @@ private struct TransferTreeRow: View {
                         .frame(width: 12, height: 12)
                 }
                 .buttonStyle(.plain)
-                .accessibilityLabel(isExpanded ? "Collapse \(title)" : "Expand \(title)")
             } else {
                 Color.clear.frame(width: 12, height: 12)
             }
@@ -413,13 +353,6 @@ private struct TransferTreeRow: View {
         .accessibilityLabel(title)
         .accessibilityValue(accessibilityValue)
         .accessibilityAddTraits(enabled ? .isButton : [])
-        .accessibilityAction {
-            guard enabled else { return }
-            switch selection {
-            case .on: onToggle(false)
-            case .off, .mixed: onToggle(true)
-            }
-        }
     }
 
     private var checkboxSymbol: String {
@@ -445,114 +378,9 @@ private struct TransferTreeRow: View {
     }
 }
 
-// MARK: - Model
-
-struct TransferNode: Identifiable, Hashable {
-    var id: String { url.path }
-    var url: URL
-    var name: String
-    var systemImage: String
-
-    /// User-facing folders only — never Library, SystemData, tmp, or other junk.
-    static let allowedNames = Array(BookmarkStore.whitelistedHomeFolderNames).sorted { a, b in
-        let order = ["Desktop", "Documents", "Downloads", "Pictures", "Movies", "Music", "Public"]
-        let ai = order.firstIndex(of: a) ?? Int.max
-        let bi = order.firstIndex(of: b) ?? Int.max
-        if ai != bi { return ai < bi }
-        return a.localizedCaseInsensitiveCompare(b) == .orderedAscending
-    }
-
-    static func homeFolders(of home: URL) -> [TransferNode] {
-        let fm = FileManager.default
-        return allowedNames.compactMap { name -> TransferNode? in
-            let url = home.appendingPathComponent(name, isDirectory: true).standardizedFileURL
-            var isDir: ObjCBool = false
-            // Only list folders that exist; missing dirs caused spurious selection errors.
-            guard fm.fileExists(atPath: url.path, isDirectory: &isDir), isDir.boolValue else {
-                return nil
-            }
-            return TransferNode(url: url, name: name, systemImage: symbol(for: name))
-        }
-    }
-
-    private static func symbol(for name: String) -> String {
-        switch name {
-        case "Documents": return "doc.fill"
-        case "Desktop": return "desktopcomputer"
-        case "Downloads": return "arrow.down.circle.fill"
-        case "Pictures": return "photo.fill"
-        case "Movies": return "film.fill"
-        case "Music": return "music.note"
-        case "Public": return "folder.fill.badge.person.crop"
-        default: return "folder.fill"
-        }
-    }
-}
-
-// MARK: - Size cache
-
-@MainActor
-final class FolderSizeStore: ObservableObject {
-    @Published private(set) var byteCounts: [String: UInt64] = [:]
-    @Published private(set) var volumeFreeBytes: UInt64?
-    @Published var usersExpanded = true
-    @Published var userExpanded = true
-
-    private var inFlight = Set<String>()
-
-    func bytes(for path: String) -> UInt64? {
-        byteCounts[path]
-    }
-
-    func refreshVolumeFree() {
-        let home = FileManager.default.homeDirectoryForCurrentUser.path
-        if let attrs = try? FileManager.default.attributesOfFileSystem(forPath: home),
-           let free = attrs[.systemFreeSize] as? NSNumber {
-            volumeFreeBytes = free.uint64Value
-        }
-    }
-
-    func estimate(paths: [String]) {
-        for path in paths where byteCounts[path] == nil && !inFlight.contains(path) {
-            inFlight.insert(path)
-            let captured = path
-            Task.detached(priority: .utility) {
-                let total = Self.allocatedSize(of: URL(fileURLWithPath: captured))
-                await MainActor.run {
-                    self.byteCounts[captured] = total
-                    self.inFlight.remove(captured)
-                }
-            }
-        }
-    }
-
-    nonisolated private static func allocatedSize(of url: URL) -> UInt64 {
-        let fm = FileManager.default
-        var isDir: ObjCBool = false
-        guard fm.fileExists(atPath: url.path, isDirectory: &isDir) else { return 0 }
-        if !isDir.boolValue {
-            let values = try? url.resourceValues(forKeys: [.totalFileAllocatedSizeKey, .fileSizeKey])
-            return UInt64(values?.totalFileAllocatedSize ?? values?.fileSize ?? 0)
-        }
-
-        var total: UInt64 = 0
-        guard let enumerator = fm.enumerator(
-            at: url,
-            includingPropertiesForKeys: [.isRegularFileKey, .totalFileAllocatedSizeKey, .fileSizeKey],
-            options: [.skipsHiddenFiles, .skipsPackageDescendants]
-        ) else { return 0 }
-
-        var visited = 0
-        let limit = 8_000
-        while let item = enumerator.nextObject() as? URL {
-            visited += 1
-            if visited > limit { break }
-            let values = try? item.resourceValues(forKeys: [
-                .isRegularFileKey, .totalFileAllocatedSizeKey, .fileSizeKey,
-            ])
-            guard values?.isRegularFile == true else { continue }
-            total += UInt64(values?.totalFileAllocatedSize ?? values?.fileSize ?? 0)
-        }
-        return total
-    }
+/// Shared whitelist names for source-side offering (Settings / bootstrap).
+enum TransferNode {
+    static let allowedNames = [
+        "Desktop", "Documents", "Downloads", "Pictures", "Movies", "Music", "Public",
+    ]
 }

@@ -21,23 +21,19 @@ struct RootView: View {
                 if model.selectedPeerID != nil {
                     Button("Preview", systemImage: "list.bullet.rectangle") { model.preview() }
                         .disabled(!model.canPreview)
-                        .help("Preview what will copy")
+                        .help("Preview what will copy from the source Mac")
                     Button("Start", systemImage: "play.fill") { model.start() }
                         .disabled(!model.canStart)
-                        .help("Start transfer")
+                        .help("Pull selected folders to this Mac")
                     if model.canStop {
                         Button("Stop", systemImage: "stop.fill") { model.stop() }
                             .help("Stop transfer")
                     }
-                } else {
-                    Button("Connect", systemImage: "link") { model.showConnectSheet = true }
-                        .help("Connect a peer Mac")
-                }
-            }
-            if model.selectedPeerID != nil {
-                ToolbarItem(placement: .primaryAction) {
                     Button("Connect", systemImage: "link") { model.showConnectSheet = true }
                         .help("Connect or change peer")
+                } else {
+                    Button("Connect", systemImage: "link") { model.showConnectSheet = true }
+                        .help("Connect to a source Mac")
                 }
             }
             ToolbarItemGroup(placement: .primaryAction) {

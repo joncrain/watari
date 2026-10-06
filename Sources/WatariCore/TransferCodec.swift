@@ -15,6 +15,11 @@ public enum FrameType: UInt8, Codable, Sendable {
     case pong = 11
     case inventoryRequest = 12
     case inventoryResponse = 13
+    /// Destination asks source what roots it offers (names + index totals).
+    case offerCatalogRequest = 14
+    case offerCatalogResponse = 15
+    /// Destination asks source to push the named roots to this connection.
+    case pullRequest = 16
 }
 
 public struct WireFrame: Sendable, Equatable {
@@ -145,6 +150,58 @@ public struct InventoryResponsePayload: Codable, Sendable, Equatable {
 
     public var asDestinationMap: [String: FileMetadata] {
         Dictionary(entries.map { ($0.relativePath, $0) }, uniquingKeysWith: { _, last in last })
+    }
+}
+
+/// One folder the source Mac is willing to send.
+public struct OfferedRoot: Codable, Sendable, Equatable, Identifiable, Hashable {
+    public var name: String
+    public var path: String
+    public var totalBytes: UInt64
+    public var entryCount: Int
+
+    public var id: String { path.isEmpty ? name : path }
+
+    public init(name: String, path: String, totalBytes: UInt64, entryCount: Int) {
+        self.name = name
+        self.path = path
+        self.totalBytes = totalBytes
+        self.entryCount = entryCount
+    }
+}
+
+public struct OfferCatalogRequestPayload: Codable, Sendable, Equatable {
+    public var protocolVersion: Int
+
+    public init(protocolVersion: Int = 1) {
+        self.protocolVersion = protocolVersion
+    }
+}
+
+public struct OfferCatalogResponsePayload: Codable, Sendable, Equatable {
+    public var displayName: String
+    public var roots: [OfferedRoot]
+
+    public init(displayName: String, roots: [OfferedRoot]) {
+        self.displayName = displayName
+        self.roots = roots
+    }
+}
+
+/// Destination asks the source to push these offered root display names.
+public struct PullRequestPayload: Codable, Sendable, Equatable {
+    public var rootNames: [String]
+    public var policy: PermissionPolicy
+    public var conflict: ConflictPolicy
+
+    public init(
+        rootNames: [String],
+        policy: PermissionPolicy = .default,
+        conflict: ConflictPolicy = .default
+    ) {
+        self.rootNames = rootNames
+        self.policy = policy
+        self.conflict = conflict
     }
 }
 

@@ -1,9 +1,18 @@
 import SwiftUI
+import WatariCore
 
-/// Main window content — single transfer selection panel (no split chrome).
+/// Main window: connect-first, then peer offer selection.
 struct DetailView: View {
+    @EnvironmentObject private var model: AppModel
+
     var body: some View {
-        TransferSelectionView()
-            .navigationTitle("Watari")
+        Group {
+            if model.selectedPeerID == nil || model.phase == .needsConnect {
+                ConnectFirstView()
+            } else {
+                TransferSelectionView()
+            }
+        }
+        .navigationTitle("Watari")
     }
 }

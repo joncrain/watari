@@ -2,7 +2,7 @@ import Foundation
 import Network
 import WatariCore
 
-/// Accepts inbound TLS jobs and inventory requests.
+/// Accepts inbound TLS: offer catalog / pull (source) and push jobs (destination).
 final class JobListener: @unchecked Sendable {
     private var listener: NWListener?
     private let transfer = TransferSession()
@@ -18,7 +18,9 @@ final class JobListener: @unchecked Sendable {
 
     func start(
         port: Int,
-        destinationRoot: URL,
+        receiveRoot: URL?,
+        offeredRoots: [String: URL],
+        offerCatalog: OfferCatalogResponsePayload,
         applier: PermissionApplier,
         onIndexUpdate: @escaping @Sendable ([FileMetadata]) -> Void,
         onError: @escaping @Sendable (String) -> Void
@@ -33,6 +35,9 @@ final class JobListener: @unchecked Sendable {
         params.allowLocalEndpointReuse = true
 
         let listener = try NWListener(using: params, on: nwPort)
+        let catalog = offerCatalog
+        let offered = offeredRoots
+        let receive = receiveRoot
         listener.newConnectionHandler = { [weak self] connection in
             guard let self else { return }
             connection.start(queue: .global(qos: .userInitiated))
@@ -40,7 +45,9 @@ final class JobListener: @unchecked Sendable {
                 do {
                     try await self.transfer.serve(
                         on: connection,
-                        destinationRoot: destinationRoot,
+                        receiveRoot: receive,
+                        offeredRoots: offered,
+                        offerCatalog: catalog,
                         identityKey: self.identityKey(),
                         displayName: self.displayName(),
                         applier: applier,

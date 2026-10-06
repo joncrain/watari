@@ -17,12 +17,13 @@ Native Mac tool in the spirit of first-party utilities — Migration Assistant c
 
 ## Composition
 
-- **Main (default):** Centered title (“Choose what to transfer”), short subtitle, **Folders** bordered hierarchical list (Users → current user → Desktop/Documents/Downloads/Pictures/Movies/Music/Public — files only) plus **Add folder…**, then a **separate Services** section below (Services / Dock / Finder stubs, Coming soon). No Library / SystemData / tmp. Footer under Folders. Brand name **Watari** stays in the window title only.
-- **Sidebar + inspector:** `NavigationSplitView` and inspector exist but are **hidden/collapsed by default**; reveal via toolbar.
-- **Toolbar:** Preview / Start when a peer is ready; Connect otherwise; sidebar/inspector toggles. Stop only while copying.
-- **Selection:** Checkbox / row click toggles whitelist folders (home-relative sandbox exception — no open panel). **Add folder…** uses the system open panel for other paths only.
-- **Connect sheet:** Host / port primary; Nearby (Bonjour) secondary tab when enabled.
-- **Settings:** General · Permissions (conflict + ownership; Advanced for the rest) · Exclusions · DLP.
+- **First screen:** Connect (host/IP/port, Nearby if allowed). No folder tree until a peer is connected.
+- **After connect:** **Folders** checklist from the **source Mac’s offer catalog** (sizes from that Mac’s `LocalFileIndex`). Separate **Services** section below (Coming soon). Footer under Folders.
+- **Sidebar + inspector:** Hidden/collapsed by default; reveal via toolbar.
+- **Toolbar:** Connect; after peer — Preview / Start (pull) / Stop; sidebar/inspector toggles.
+- **Settings:** Receive folder (destination); Listen + offered folders (source role). “Offer another folder…” is source-only.
+- **Connect sheet:** Host / port primary; Nearby secondary when enabled.
+
 
 ## Required states (real screens)
 

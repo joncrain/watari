@@ -119,13 +119,9 @@ struct ConnectSheet: View {
                     model.peers.append(record)
                     model.selectedPeerID = record.id
                     model.showConnectSheet = false
-                    if model.folderBookmarks.isEmpty {
-                        model.phase = .noFolders
-                        model.statusMessage = "Peer saved. Select folders to begin."
-                    } else {
-                        model.phase = .waitingForPeer
-                        model.statusMessage = "Peer paired. Run Preview."
-                    }
+                    model.phase = .browsingOffers
+                    model.statusMessage = "Peer connected. Loading offered folders…"
+                    model.refreshPeerOffers()
                     busy = false
                     dismiss()
                 }

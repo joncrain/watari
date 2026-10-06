@@ -101,4 +101,31 @@ struct TransferPathsTests {
         #expect(summary.items.first?.destination?.ownerName == "ada")
         #expect(summary.items.first?.source?.uid == 502)
     }
+
+    @Test("offer catalog and pull request round-trip")
+    func offerCatalogFrames() throws {
+        let req = OfferCatalogRequestPayload()
+        var encoded = try TransferCodec.encodeJSON(.offerCatalogRequest, req)
+        let frame = try TransferCodec.decode(from: &encoded)
+        #expect(frame?.type == .offerCatalogRequest)
+
+        let catalog = OfferCatalogResponsePayload(
+            displayName: "MacBook",
+            roots: [OfferedRoot(name: "Documents", path: "/Users/a/Documents", totalBytes: 100, entryCount: 3)]
+        )
+        var resp = try TransferCodec.encodeJSON(.offerCatalogResponse, catalog)
+        let rFrame = try TransferCodec.decode(from: &resp)
+        let decoded = try TransferCodec.decodeJSON(rFrame!, as: OfferCatalogResponsePayload.self)
+        #expect(decoded.roots.first?.name == "Documents")
+        #expect(decoded.roots.first?.totalBytes == 100)
+
+        var pull = try TransferCodec.encodeJSON(
+            .pullRequest,
+            PullRequestPayload(rootNames: ["Documents", "Desktop"])
+        )
+        let pFrame = try TransferCodec.decode(from: &pull)
+        #expect(pFrame?.type == .pullRequest)
+        let pullDecoded = try TransferCodec.decodeJSON(pFrame!, as: PullRequestPayload.self)
+        #expect(pullDecoded.rootNames == ["Documents", "Desktop"])
+    }
 }

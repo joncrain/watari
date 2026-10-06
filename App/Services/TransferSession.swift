@@ -52,6 +52,62 @@ final class TransferSession: @unchecked Sendable {
         return try TransferCodec.decodeJSON(frame, as: InventoryResponsePayload.self).entries
     }
 
+    /// Destination-primary: ask the source what folder roots it offers (from its index).
+    func fetchOfferCatalog(
+        peer: PeerRecord,
+        connector: PeerConnector
+    ) async throws -> OfferCatalogResponsePayload {
+        cancelled = false
+        let connection = try await connector.openTLS(to: peer)
+        defer { connection.cancel() }
+
+        let frames = FrameBuffer()
+        try await send(
+            try TransferCodec.encodeJSON(.offerCatalogRequest, OfferCatalogRequestPayload()),
+            on: connection
+        )
+        let frame = try await receiveFrame(on: connection, buffer: frames)
+        guard frame.type == .offerCatalogResponse else {
+            throw TransferSessionError.inventoryFailed("Expected offerCatalogResponse, got \(frame.type)")
+        }
+        return try TransferCodec.decodeJSON(frame, as: OfferCatalogResponsePayload.self)
+    }
+
+    /// Destination-primary: ask the source to push selected roots into `receiveRoot`.
+    func pull(
+        rootNames: [String],
+        peer: PeerRecord,
+        policy: PermissionPolicy,
+        conflict: ConflictPolicy,
+        receiveRoot: URL,
+        connector: PeerConnector,
+        applier: PermissionApplier,
+        onIndexUpdate: @escaping @Sendable ([FileMetadata]) -> Void,
+        progress: @escaping @Sendable (Double, String?) -> Void
+    ) async throws {
+        cancelled = false
+        let connection = try await connector.openTLS(to: peer)
+        defer { connection.cancel() }
+
+        try await send(
+            try TransferCodec.encodeJSON(
+                .pullRequest,
+                PullRequestPayload(rootNames: rootNames, policy: policy, conflict: conflict)
+            ),
+            on: connection
+        )
+        try await receiveJob(
+            firstFrame: nil,
+            on: connection,
+            buffer: FrameBuffer(),
+            destinationRoot: receiveRoot,
+            policy: policy,
+            applier: applier,
+            onIndexUpdate: onIndexUpdate,
+            progress: progress
+        )
+    }
+
     func run(
         folders: [BookmarkEntry],
         peer: PeerRecord,
@@ -154,9 +210,15 @@ final class TransferSession: @unchecked Sendable {
     }
 
     /// Serve one inbound connection: hello already exchanged by listener, or do hello here.
+    /// - Parameters:
+    ///   - receiveRoot: Where inbound push jobs write (destination role).
+    ///   - offeredRoots: Display-name → URL this Mac can send (source role).
+    ///   - offerCatalog: Snapshot of offered roots + index totals for destination-primary UI.
     func serve(
         on connection: NWConnection,
-        destinationRoot: URL,
+        receiveRoot: URL?,
+        offeredRoots: [String: URL],
+        offerCatalog: OfferCatalogResponsePayload,
         identityKey: Data,
         displayName: String,
         applier: PermissionApplier,
@@ -175,14 +237,14 @@ final class TransferSession: @unchecked Sendable {
                 publicKey: identityKey
             )
             try await send(try TransferCodec.encodeJSON(.hello, reply), on: connection)
-        } else if helloFrame.type == .inventoryRequest {
-            try await handleInventory(helloFrame, destinationRoot: destinationRoot, on: connection)
-        } else if helloFrame.type == .jobManifest {
-            try await receiveJob(
-                firstFrame: helloFrame,
+        } else {
+            try await dispatchServerFrame(
+                helloFrame,
                 on: connection,
                 buffer: frames,
-                destinationRoot: destinationRoot,
+                receiveRoot: receiveRoot,
+                offeredRoots: offeredRoots,
+                offerCatalog: offerCatalog,
                 applier: applier,
                 onIndexUpdate: onIndexUpdate,
                 progress: progress
@@ -197,46 +259,201 @@ final class TransferSession: @unchecked Sendable {
             } catch {
                 throw TransferSessionError.peerGone
             }
+            let finished = try await dispatchServerFrame(
+                frame,
+                on: connection,
+                buffer: frames,
+                receiveRoot: receiveRoot,
+                offeredRoots: offeredRoots,
+                offerCatalog: offerCatalog,
+                applier: applier,
+                onIndexUpdate: onIndexUpdate,
+                progress: progress
+            )
+            if finished { return }
+        }
+    }
 
-            switch frame.type {
-            case .inventoryRequest:
-                try await handleInventory(frame, destinationRoot: destinationRoot, on: connection)
-            case .jobManifest:
-                try await receiveJob(
-                    firstFrame: frame,
-                    on: connection,
-                    buffer: frames,
-                    destinationRoot: destinationRoot,
-                    applier: applier,
-                    onIndexUpdate: onIndexUpdate,
-                    progress: progress
-                )
-                return
-            case .pairChallenge:
-                continue
-            case .jobComplete:
-                return
-            default:
-                continue
+    /// Returns `true` when the connection should close after handling the frame.
+    @discardableResult
+    private func dispatchServerFrame(
+        _ frame: WireFrame,
+        on connection: NWConnection,
+        buffer: FrameBuffer,
+        receiveRoot: URL?,
+        offeredRoots: [String: URL],
+        offerCatalog: OfferCatalogResponsePayload,
+        applier: PermissionApplier,
+        onIndexUpdate: @escaping @Sendable ([FileMetadata]) -> Void,
+        progress: @escaping @Sendable (Double, String?) -> Void
+    ) async throws -> Bool {
+        switch frame.type {
+        case .offerCatalogRequest:
+            try await send(
+                try TransferCodec.encodeJSON(.offerCatalogResponse, offerCatalog),
+                on: connection
+            )
+            return false
+        case .inventoryRequest:
+            try await handleInventory(
+                frame,
+                receiveRoot: receiveRoot,
+                offeredRoots: offeredRoots,
+                on: connection
+            )
+            return false
+        case .pullRequest:
+            let request = try TransferCodec.decodeJSON(frame, as: PullRequestPayload.self)
+            try await pushOfferedRoots(
+                names: request.rootNames,
+                offeredRoots: offeredRoots,
+                policy: request.policy,
+                conflict: request.conflict,
+                on: connection,
+                progress: progress
+            )
+            return true
+        case .jobManifest:
+            guard let receiveRoot else {
+                throw TransferSessionError.inventoryFailed("This Mac has no receive folder configured.")
             }
+            try await receiveJob(
+                firstFrame: frame,
+                on: connection,
+                buffer: buffer,
+                destinationRoot: receiveRoot,
+                applier: applier,
+                onIndexUpdate: onIndexUpdate,
+                progress: progress
+            )
+            return true
+        case .pairChallenge, .ping:
+            return false
+        case .jobComplete:
+            return true
+        default:
+            return false
         }
     }
 
     private func handleInventory(
         _ frame: WireFrame,
-        destinationRoot: URL,
+        receiveRoot: URL?,
+        offeredRoots: [String: URL],
         on connection: NWConnection
     ) async throws {
         let request = try TransferCodec.decodeJSON(frame, as: InventoryRequestPayload.self)
-        let entries = try DestinationInventory.scan(
-            destinationRoot: destinationRoot,
-            rootNames: request.rootNames,
-            denylist: denylist
+        let entries: [FileMetadata]
+        let offeredSubset = Dictionary(
+            uniqueKeysWithValues: request.rootNames.compactMap { name -> (String, URL)? in
+                guard let url = offeredRoots[name] else { return nil }
+                return (name, url)
+            }
         )
+        if !offeredSubset.isEmpty {
+            // Source inventory for destination-primary Preview.
+            entries = try SourceOffer.scan(roots: offeredSubset, denylist: denylist)
+        } else if let receiveRoot {
+            entries = try DestinationInventory.scan(
+                destinationRoot: receiveRoot,
+                rootNames: request.rootNames,
+                denylist: denylist
+            )
+        } else {
+            entries = []
+        }
         try await send(
             try TransferCodec.encodeJSON(.inventoryResponse, InventoryResponsePayload(entries: entries)),
             on: connection
         )
+    }
+
+    private func pushOfferedRoots(
+        names: [String],
+        offeredRoots: [String: URL],
+        policy: PermissionPolicy,
+        conflict: ConflictPolicy,
+        on connection: NWConnection,
+        progress: @escaping @Sendable (Double, String?) -> Void
+    ) async throws {
+        var roots: [String: URL] = [:]
+        for name in names {
+            if let url = offeredRoots[name] {
+                roots[name] = url
+            }
+        }
+        guard !roots.isEmpty else {
+            throw TransferSessionError.inventoryFailed("No matching offered folders for pull request.")
+        }
+
+        var sources: [FileMetadata] = []
+        var skipped: [(path: String, reason: SkipReason)] = []
+        for (name, url) in roots.sorted(by: { $0.key < $1.key }) {
+            let scanned = try FileScanner.scan(
+                root: url,
+                displayRoot: name,
+                denylist: denylist
+            )
+            sources.append(contentsOf: scanned.entries)
+            skipped.append(contentsOf: scanned.skipped)
+        }
+
+        let receiving = ReceivingIdentity(uid: 0, gid: 0, userName: "receiving", groupName: "receiving")
+        let dlp = DLPPolicy()
+        let preview = PreviewDiff.build(
+            sources: sources,
+            destinations: [:],
+            denylist: denylist,
+            skipped: skipped,
+            policy: policy,
+            conflict: conflict,
+            dlp: dlp,
+            receiving: receiving
+        )
+        let toSend = TransferPaths.itemsToTransfer(from: preview)
+        let totalBytes = toSend.compactMap(\.source?.size).reduce(UInt64(0), +)
+
+        let manifest = JobManifestPayload(
+            jobId: UUID().uuidString,
+            policy: policy,
+            conflict: conflict,
+            fileCount: toSend.count,
+            totalBytes: totalBytes
+        )
+        try await send(try TransferCodec.encodeJSON(.jobManifest, manifest), on: connection)
+
+        var sent: UInt64 = 0
+        for item in toSend {
+            if cancelled { throw TransferSessionError.cancelled }
+            guard let meta = item.source else { continue }
+            try await send(try TransferCodec.encodeJSON(.fileHeader, FileHeaderPayload(metadata: meta)), on: connection)
+
+            if meta.isDirectory || meta.isSymlink {
+                try await send(try TransferCodec.encode(WireFrame(type: .fileEnd)), on: connection)
+            } else {
+                guard let fileURL = TransferPaths.resolve(meta.relativePath, roots: roots) else {
+                    throw TransferSessionError.missingSourceFile(meta.relativePath)
+                }
+                let chunks = try FileChunkReader.readChunks(at: fileURL, chunkSize: chunkSize)
+                if chunks.isEmpty {
+                    try await send(try TransferCodec.encode(WireFrame(type: .fileChunk, payload: Data())), on: connection)
+                } else {
+                    for chunk in chunks {
+                        if cancelled { throw TransferSessionError.cancelled }
+                        try await send(try TransferCodec.encode(WireFrame(type: .fileChunk, payload: chunk)), on: connection)
+                        sent += UInt64(chunk.count)
+                        let fraction = totalBytes == 0 ? 1.0 : min(1.0, Double(sent) / Double(totalBytes))
+                        progress(fraction, meta.relativePath)
+                    }
+                }
+                try await send(try TransferCodec.encode(WireFrame(type: .fileEnd)), on: connection)
+            }
+            let fraction = totalBytes == 0 ? 1.0 : min(1.0, Double(sent) / Double(totalBytes))
+            progress(fraction, meta.relativePath)
+        }
+
+        try await send(try TransferCodec.encode(WireFrame(type: .jobComplete)), on: connection)
+        progress(1, "Complete")
     }
 
     /// Receiver side: read frames and write files under destinationRoot.

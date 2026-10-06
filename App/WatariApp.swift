@@ -10,7 +10,10 @@ struct WatariApp: App {
             RootView()
                 .environmentObject(appModel)
                 .frame(minWidth: 640, minHeight: 520)
-                .onAppear { appModel.refreshListener() }
+                .onAppear {
+                    appModel.bootstrapOfferedWhitelist()
+                    appModel.refreshListener()
+                }
         }
         .commands {
             CommandGroup(replacing: .newItem) {}

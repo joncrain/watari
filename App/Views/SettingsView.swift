@@ -10,19 +10,11 @@ struct SettingsView: View {
                 Form {
                     Text("Watari copies chosen folders only. It does not migrate accounts, apps, or MDM profiles.")
                         .foregroundStyle(.secondary)
-                    Section("Receive") {
-                        Toggle("Listen for inbound jobs", isOn: $model.network.listenEnabled)
-                            .onChange(of: model.network.listenEnabled) { _, _ in model.refreshListener() }
-                        TextField(
-                            "Port",
-                            value: $model.network.listenPort,
-                            format: IntegerFormatStyle<Int>().grouping(.never)
-                        )
-                        .onChange(of: model.network.listenPort) { _, _ in model.refreshListener() }
+                    Section("Receive (this Mac is the destination)") {
                         HStack {
                             VStack(alignment: .leading, spacing: 2) {
                                 Text("Receive into")
-                                Text(model.receiveFolder?.path ?? "Choose a folder for inbound jobs")
+                                Text(model.receiveFolder?.path ?? "Choose where pulled folders arrive")
                                     .font(.caption)
                                     .foregroundStyle(.secondary)
                                     .lineLimit(2)
@@ -30,9 +22,42 @@ struct SettingsView: View {
                             Spacer()
                             Button("Choose…") { model.chooseReceiveFolder() }
                         }
-                        Text("Listening requires a receive folder (security-scoped).")
+                        Text("Required on the Mac that pulls folders.")
                             .font(.caption)
                             .foregroundStyle(.secondary)
+                    }
+                    Section("Offer (this Mac is the source)") {
+                        Toggle("Listen for peers", isOn: $model.network.listenEnabled)
+                            .onChange(of: model.network.listenEnabled) { _, _ in model.refreshListener() }
+                        TextField(
+                            "Port",
+                            value: $model.network.listenPort,
+                            format: IntegerFormatStyle<Int>().grouping(.never)
+                        )
+                        .onChange(of: model.network.listenPort) { _, _ in model.refreshListener() }
+                        Text("When listening, peers can see folders you offer and pull them.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        ForEach(model.offeredFolders) { folder in
+                            HStack {
+                                Text(folder.displayName)
+                                Spacer()
+                                Text(folder.path)
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                                    .lineLimit(1)
+                                    .truncationMode(.middle)
+                            }
+                            .contextMenu {
+                                Button("Re-authorize…") { model.reauthorizeFolder(folder.id) }
+                                Button("Remove", role: .destructive) { model.removeOfferedFolder(folder.id) }
+                            }
+                        }
+                        Button("Offer another folder…") { model.addOfferedFolder() }
+                        Button("Reindex offered folders") {
+                            model.reindexOfferedFolders()
+                            model.refreshListener()
+                        }
                     }
                     DisclosureGroup("Advanced") {
                         NetworkAdvancedForm()

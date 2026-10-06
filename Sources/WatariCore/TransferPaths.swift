@@ -88,3 +88,44 @@ public enum ReceiveIndex {
         index.replace(rootPath: destinationRootPath, entries: Array(byPath.values))
     }
 }
+
+/// Build / scan what a source Mac offers to pull.
+public enum SourceOffer {
+    public static func catalog(
+        displayRoots: [(name: String, path: String)],
+        index: LocalFileIndex
+    ) -> [OfferedRoot] {
+        displayRoots.map { root in
+            let entries = index.entries(rootPath: root.path)
+            let bytes = entries.reduce(UInt64(0)) { $0 + $1.size }
+            return OfferedRoot(
+                name: root.name,
+                path: root.path,
+                totalBytes: bytes,
+                entryCount: entries.count
+            )
+        }
+    }
+
+    public static func scan(
+        roots: [String: URL],
+        denylist: Denylist = Denylist(),
+        hashContents: Bool = true
+    ) throws -> [FileMetadata] {
+        var entries: [FileMetadata] = []
+        for (name, url) in roots.sorted(by: { $0.key < $1.key }) {
+            var isDir: ObjCBool = false
+            guard FileManager.default.fileExists(atPath: url.path, isDirectory: &isDir), isDir.boolValue else {
+                continue
+            }
+            let scanned = try FileScanner.scan(
+                root: url,
+                displayRoot: name,
+                denylist: denylist,
+                hashContents: hashContents
+            )
+            entries.append(contentsOf: scanned.entries)
+        }
+        return entries
+    }
+}
