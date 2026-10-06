@@ -18,7 +18,7 @@ Native Mac tool in the spirit of first-party utilities — not a ported iPhone l
 ## Composition
 
 - **Sidebar:** This Mac, paired peers, jobs.
-- **Main:** Folder list for the job → preview table.
+- **Main:** Home Folder section (tree + stubs for Services/Dock/Finder) → preview table.
 - **Inspector:** Permission policy summary + exception count.
 - **Toolbar:** Preview, Start, Stop (with keyboard equivalents).
 - **Connect sheet:** Host / port primary; Nearby (Bonjour) secondary tab when enabled.

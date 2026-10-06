@@ -27,7 +27,7 @@ final class AppModel: ObservableObject {
     @Published var dlp: DLPPolicy = ManagedDefaults.dlpPolicy()
     @Published var network: NetworkConfig = .default
     @Published var jobLog = JobLog()
-    @Published var statusMessage: String = "Add a folder to begin."
+    @Published var statusMessage: String = "Select folders from Home to begin."
     @Published var progressFraction: Double = 0
     @Published var showConnectSheet = false
     @Published var libraryWarning: String?
@@ -89,6 +89,24 @@ final class AppModel: ObservableObject {
         ingestFolder(url)
     }
 
+    func isFolderSelected(path: String) -> Bool {
+        folderBookmarks.contains { $0.path == path }
+    }
+
+    /// Toggle a home-folder (or other) path into the job. Selecting prompts for sandbox access.
+    func setFolderSelected(_ selected: Bool, url: URL) {
+        if selected {
+            if isFolderSelected(path: url.path) { return }
+            guard let picked = bookmarkStore.pickFolder(
+                startingAt: url,
+                message: "Allow Watari to read “\(url.lastPathComponent)” for this transfer."
+            ) else { return }
+            ingestFolder(picked)
+        } else if let entry = folderBookmarks.first(where: { $0.path == url.path }) {
+            removeFolder(entry.id)
+        }
+    }
+
     func chooseReceiveFolder() {
         guard let url = bookmarkStore.pickFolder() else { return }
         do {
@@ -134,7 +152,7 @@ final class AppModel: ObservableObject {
         peerDestinations = [:]
         if folderBookmarks.isEmpty {
             phase = .noFolders
-            statusMessage = "Add a folder to begin."
+            statusMessage = "Select folders from Home to begin."
         }
     }
 
@@ -354,7 +372,7 @@ final class AppModel: ObservableObject {
         showConnectSheet = false
         if folderBookmarks.isEmpty {
             phase = .noFolders
-            statusMessage = "Peer saved. Add a folder to begin."
+            statusMessage = "Peer saved. Select folders from Home to begin."
         } else {
             phase = .waitingForPeer
             statusMessage = "Peer connected. Run Preview."

@@ -6,7 +6,7 @@ struct WatariApp: App {
     @StateObject private var appModel = AppModel()
 
     var body: some Scene {
-        WindowGroup {
+        WindowGroup("Watari") {
             RootView()
                 .environmentObject(appModel)
                 .frame(minWidth: 880, minHeight: 560)

@@ -10,14 +10,37 @@ struct SettingsView: View {
                 Form {
                     Text("Watari copies chosen folders only. It does not migrate accounts, apps, or MDM profiles.")
                         .foregroundStyle(.secondary)
+                    Section("Receive") {
+                        Toggle("Listen for inbound jobs", isOn: $model.network.listenEnabled)
+                            .onChange(of: model.network.listenEnabled) { _, _ in model.refreshListener() }
+                        TextField(
+                            "Port",
+                            value: $model.network.listenPort,
+                            format: IntegerFormatStyle<Int>().grouping(.never)
+                        )
+                        .onChange(of: model.network.listenPort) { _, _ in model.refreshListener() }
+                        HStack {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text("Receive into")
+                                Text(model.receiveFolder?.path ?? "Choose a folder for inbound jobs")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                                    .lineLimit(2)
+                            }
+                            Spacer()
+                            Button("Choose…") { model.chooseReceiveFolder() }
+                        }
+                        Text("Listening requires a receive folder (security-scoped).")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    DisclosureGroup("Advanced") {
+                        NetworkAdvancedForm()
+                            .environmentObject(model)
+                    }
                 }
                 .formStyle(.grouped)
-                .frame(width: 420)
-            }
-            Tab("Network", systemImage: "network") {
-                NetworkSettingsForm()
-                    .environmentObject(model)
-                    .frame(width: 460)
+                .frame(width: 460)
             }
             Tab("Permissions", systemImage: "person.badge.key") {
                 Form {
@@ -67,55 +90,46 @@ struct SettingsView: View {
     }
 }
 
-struct NetworkSettingsForm: View {
+private struct NetworkAdvancedForm: View {
     @EnvironmentObject private var model: AppModel
 
     var body: some View {
-        Form {
-            Section {
-                Toggle("Listen for inbound jobs", isOn: $model.network.listenEnabled)
-                    .onChange(of: model.network.listenEnabled) { _, _ in model.refreshListener() }
-                TextField("Port", value: $model.network.listenPort, format: .number)
-                    .onChange(of: model.network.listenPort) { _, _ in model.refreshListener() }
-                HStack {
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("Receive into")
-                        Text(model.receiveFolder?.path ?? "Choose a folder for inbound jobs")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                            .lineLimit(2)
-                    }
-                    Spacer()
-                    Button("Choose…") { model.chooseReceiveFolder() }
-                }
-                Text("Listening requires a receive folder (security-scoped). Peer Preview inventory is scanned under that root.")
-                    .font(.caption)
+        Group {
+            Picker("Bind", selection: $model.network.bindMode) {
+                Text("Localhost").tag(BindMode.localhost)
+                Text("LAN interfaces").tag(BindMode.lan)
+                Text("Specific address").tag(BindMode.address)
+            }
+            if model.network.bindMode == .address {
+                TextField("Address", text: Binding(
+                    get: { model.network.bindAddress ?? "" },
+                    set: { model.network.bindAddress = $0 }
+                ))
+            }
+            Picker("Discovery", selection: $model.network.discoveryMode) {
+                Text("Off").tag(DiscoveryMode.off)
+                Text("Nearby (Bonjour)").tag(DiscoveryMode.nearby)
+                Text("Explicit only").tag(DiscoveryMode.explicit)
+            }
+            .disabled(ManagedDefaults.denyBonjour)
+            TextField(
+                "Bandwidth limit (bytes/s, 0 = none)",
+                value: $model.network.bandwidthLimitBytesPerSecond,
+                format: IntegerFormatStyle<Int>().grouping(.never)
+            )
+            TextField(
+                "Idle timeout (seconds)",
+                value: $model.network.idleTimeoutSeconds,
+                format: IntegerFormatStyle<Int>().grouping(.never)
+            )
+            TextField(
+                "Max concurrent transfers",
+                value: $model.network.maxConcurrentTransfers,
+                format: IntegerFormatStyle<Int>().grouping(.never)
+            )
+            if ManagedDefaults.managedMode {
+                Text("Managed by organization — some values may be locked via \(ManagedPreferenceKey.domain).")
                     .foregroundStyle(.secondary)
-                Picker("Bind", selection: $model.network.bindMode) {
-                    Text("Localhost").tag(BindMode.localhost)
-                    Text("LAN interfaces").tag(BindMode.lan)
-                    Text("Specific address").tag(BindMode.address)
-                }
-                if model.network.bindMode == .address {
-                    TextField("Address", text: Binding(
-                        get: { model.network.bindAddress ?? "" },
-                        set: { model.network.bindAddress = $0 }
-                    ))
-                }
-                Picker("Discovery", selection: $model.network.discoveryMode) {
-                    Text("Off").tag(DiscoveryMode.off)
-                    Text("Nearby (Bonjour)").tag(DiscoveryMode.nearby)
-                    Text("Explicit only").tag(DiscoveryMode.explicit)
-                }
-                .disabled(ManagedDefaults.denyBonjour)
-                TextField("Bandwidth limit (bytes/s, 0 = none)", value: $model.network.bandwidthLimitBytesPerSecond, format: .number)
-                TextField("Idle timeout (seconds)", value: $model.network.idleTimeoutSeconds, format: .number)
-                TextField("Max concurrent transfers", value: $model.network.maxConcurrentTransfers, format: .number)
-            } footer: {
-                if ManagedDefaults.managedMode {
-                    Text("Managed by organization — some values may be locked via \(ManagedPreferenceKey.domain).")
-                        .foregroundStyle(.secondary)
-                }
             }
             Section("Peers") {
                 ForEach(model.peers) { peer in
@@ -137,6 +151,5 @@ struct NetworkSettingsForm: View {
                 }
             }
         }
-        .formStyle(.grouped)
     }
 }

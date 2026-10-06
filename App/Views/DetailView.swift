@@ -10,54 +10,28 @@ struct DetailView: View {
             Divider()
             content
         }
-        .navigationTitle("Crossing")
+        .navigationTitle("Watari")
     }
 
     private var header: some View {
-        HStack(alignment: .top) {
-            VStack(alignment: .leading, spacing: 4) {
-                Text(model.statusMessage)
-                    .font(.headline)
-                if let warning = model.libraryWarning {
-                    Text(warning)
-                        .font(.callout)
-                        .foregroundStyle(.orange)
-                }
+        VStack(alignment: .leading, spacing: 4) {
+            Text(model.statusMessage)
+                .font(.headline)
+            if let warning = model.libraryWarning {
+                Text(warning)
+                    .font(.callout)
+                    .foregroundStyle(.orange)
             }
-            Spacer()
-            Menu("Add") {
-                ForEach(ConvenienceTarget.allCases) { target in
-                    Button(target.title) { model.addConvenience(target) }
-                }
-                Divider()
-                Button("Add Folder…") { model.addFolder() }
-            }
-            .keyboardShortcut("o", modifiers: [.command])
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
         .padding()
     }
 
     @ViewBuilder
     private var content: some View {
         switch model.phase {
-        case .noFolders:
-            EmptyStateView(
-                title: "No folders yet",
-                systemImage: "folder.badge.plus",
-                message: "Watari copies only the folders you choose. It will not migrate accounts, apps, keychains, or configuration profiles.",
-                actionTitle: "Add Folder…",
-                action: { model.addFolder() }
-            )
-        case .waitingForPeer where model.selectedPeerID == nil:
-            EmptyStateView(
-                title: "Waiting for peer",
-                systemImage: "link.badge.plus",
-                message: "Connect by hostname or IP. Nearby Bonjour is optional and often blocked on enterprise networks.",
-                actionTitle: "Connect…",
-                action: { model.showConnectSheet = true }
-            )
-        case .waitingForPeer:
-            folderList
+        case .noFolders, .waitingForPeer:
+            TransferSectionsView()
         case .previewReady, .finishedWithExceptions:
             previewList
         case .copying:
@@ -67,7 +41,7 @@ struct DetailView: View {
                     .padding(.horizontal)
                 Text(model.statusMessage)
                     .foregroundStyle(.secondary)
-                folderList
+                TransferSectionsView()
             }
         case .peerGone:
             EmptyStateView(
@@ -77,46 +51,6 @@ struct DetailView: View {
                 actionTitle: "Connect…",
                 action: { model.showConnectSheet = true }
             )
-        }
-    }
-
-    private var folderList: some View {
-        List {
-            Section("Sources") {
-                ForEach(ConvenienceTarget.allCases) { target in
-                    Button {
-                        model.addConvenience(target)
-                    } label: {
-                        Label(target.title, systemImage: "folder")
-                    }
-                }
-                Button {
-                    model.addFolder()
-                } label: {
-                    Label("Add Folder…", systemImage: "folder.badge.plus")
-                }
-            }
-            Section("Folders in this job") {
-                if model.folderBookmarks.isEmpty {
-                    Text("None yet")
-                        .foregroundStyle(.secondary)
-                } else {
-                    ForEach(model.folderBookmarks) { folder in
-                        HStack {
-                            Label(folder.displayName, systemImage: "folder")
-                            Spacer()
-                            Text(folder.path)
-                                .foregroundStyle(.secondary)
-                                .lineLimit(1)
-                                .truncationMode(.middle)
-                        }
-                        .contextMenu {
-                            Button("Re-authorize…") { model.reauthorizeFolder(folder.id) }
-                            Button("Remove", role: .destructive) { model.removeFolder(folder.id) }
-                        }
-                    }
-                }
-            }
         }
     }
 
@@ -165,7 +99,13 @@ struct DetailView: View {
                     }
                 }
             }
-            folderList
+            Section("Home Folder") {
+                Text("\(model.folderBookmarks.count) folder(s) selected")
+                    .foregroundStyle(.secondary)
+                ForEach(model.folderBookmarks) { folder in
+                    Label(folder.displayName, systemImage: "folder.fill")
+                }
+            }
         }
     }
 

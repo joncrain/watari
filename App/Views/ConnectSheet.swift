@@ -121,7 +121,7 @@ struct ConnectSheet: View {
                     model.showConnectSheet = false
                     if model.folderBookmarks.isEmpty {
                         model.phase = .noFolders
-                        model.statusMessage = "Peer saved. Add a folder to begin."
+                        model.statusMessage = "Peer saved. Select folders from Home to begin."
                     } else {
                         model.phase = .waitingForPeer
                         model.statusMessage = "Peer paired. Run Preview."
