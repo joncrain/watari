@@ -41,6 +41,8 @@ open Watari.xcodeproj
 4. TLS after pairing — pin peer keys; no trust-the-LAN.
 5. Stay out of enterprise identity — never touch profiles, TCC DB, or keychains.
 
+MDM-configurable **DLP** keys are reserved for a later release (extension/path/size/direction/peer gates). See [docs/enterprise.md](docs/enterprise.md).
+
 ## License
 
 Private — coordinate before redistribution.

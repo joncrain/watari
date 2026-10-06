@@ -53,7 +53,17 @@ final class TransferSession: @unchecked Sendable {
         }
 
         let receiving = applier.currentIdentity()
-        let preview = PreviewDiff.build(sources: sources, denylist: denylist, policy: policy, receiving: receiving)
+        let dlp = ManagedDefaults.dlpPolicy()
+        if DLPEngine.evaluateJobDirection(outbound: true, policy: dlp) != .allow {
+            throw TransferSessionError.cancelled
+        }
+        let preview = PreviewDiff.build(
+            sources: sources,
+            denylist: denylist,
+            policy: policy,
+            dlp: dlp,
+            receiving: receiving
+        )
         let toSend = preview.items.filter { $0.action == .copy || $0.action == .update }
         let totalBytes = toSend.compactMap(\.source?.size).reduce(UInt64(0), +)
 

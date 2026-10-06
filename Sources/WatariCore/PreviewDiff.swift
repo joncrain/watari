@@ -14,6 +14,7 @@ public enum SkipReason: String, Codable, Sendable, Equatable {
     case icloudNotDownloaded
     case tccDenied
     case unreadable
+    case dlp
 }
 
 public struct PreviewItem: Codable, Sendable, Equatable {
@@ -67,6 +68,7 @@ public enum PreviewDiff {
         denylist: Denylist = Denylist(),
         skipped: [(path: String, reason: SkipReason)] = [],
         policy: PermissionPolicy = .default,
+        dlp: DLPPolicy = .disabled,
         receiving: ReceivingIdentity
     ) -> PreviewSummary {
         var items: [PreviewItem] = []
@@ -84,6 +86,23 @@ public enum PreviewDiff {
                         relativePath: source.relativePath,
                         action: .skip,
                         skipReason: .denylist,
+                        source: source
+                    )
+                )
+                continue
+            }
+
+            let dlpVerdict = DLPEngine.evaluateFile(
+                relativePath: source.relativePath,
+                size: source.size,
+                policy: dlp
+            )
+            if dlpVerdict != .allow {
+                items.append(
+                    PreviewItem(
+                        relativePath: source.relativePath,
+                        action: .skip,
+                        skipReason: .dlp,
                         source: source
                     )
                 )

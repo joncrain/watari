@@ -124,4 +124,15 @@ public enum ManagedPreferenceKey {
     public static let keepNumericOwner = "KeepNumericOwner"
     public static let peerAllowlist = "PeerAllowlist"
     public static let denyBonjour = "DenyBonjour"
+    // DLP (future enforcement; keys reserved — see docs/enterprise.md)
+    public static let dlpEnabled = DLPManagedKey.enabled
+    public static let dlpLocked = DLPManagedKey.locked
+    public static let dlpBlockedExtensions = DLPManagedKey.blockedExtensions
+    public static let dlpBlockedPathSuffixes = DLPManagedKey.blockedPathSuffixes
+    public static let dlpMaxFileBytes = DLPManagedKey.maxFileBytes
+    public static let dlpBlockedNameSubstrings = DLPManagedKey.blockedNameSubstrings
+    public static let dlpRequireAllowlistedPeer = DLPManagedKey.requireAllowlistedPeer
+    public static let dlpBlockOutbound = DLPManagedKey.blockOutbound
+    public static let dlpBlockInbound = DLPManagedKey.blockInbound
+    public static let dlpPolicyLabel = DLPManagedKey.policyLabel
 }

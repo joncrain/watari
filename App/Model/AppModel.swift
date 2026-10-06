@@ -19,6 +19,7 @@ final class AppModel: ObservableObject {
     @Published var selectedPeerID: PeerRecord.ID?
     @Published var preview: PreviewSummary?
     @Published var policy: PermissionPolicy = .default
+    @Published var dlp: DLPPolicy = ManagedDefaults.dlpPolicy()
     @Published var network: NetworkConfig = .default
     @Published var jobLog = JobLog()
     @Published var statusMessage: String = "Add a folder to begin."
@@ -89,7 +90,7 @@ final class AppModel: ObservableObject {
             FileMetadata(relativePath: $0.displayName, isDirectory: true, mode: 0o755)
         }
         let receiving = permissionApplier.currentIdentity()
-        let summary = PreviewDiff.build(sources: sources, policy: policy, receiving: receiving)
+        let summary = PreviewDiff.build(sources: sources, policy: policy, dlp: dlp, receiving: receiving)
         preview = summary
         phase = .previewReady
         statusMessage = "Preview ready — \(summary.copy) copy, \(summary.update) update, \(summary.skip) skip."

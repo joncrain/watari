@@ -56,4 +56,24 @@ enum ManagedDefaults {
             network.discoveryMode = .explicit
         }
     }
+
+    /// Load MDM DLP policy. Enforcement beyond preview is a later release; keys are live for staging.
+    static func dlpPolicy() -> DLPPolicy {
+        let d = suite
+        guard d.object(forKey: DLPManagedKey.enabled) as? Bool == true else {
+            return .disabled
+        }
+        return DLPPolicy(
+            enabled: true,
+            locked: d.object(forKey: DLPManagedKey.locked) as? Bool ?? false,
+            blockedExtensions: d.stringArray(forKey: DLPManagedKey.blockedExtensions) ?? [],
+            blockedPathSuffixes: d.stringArray(forKey: DLPManagedKey.blockedPathSuffixes) ?? [],
+            maxFileBytes: UInt64(d.integer(forKey: DLPManagedKey.maxFileBytes)),
+            blockedNameSubstrings: d.stringArray(forKey: DLPManagedKey.blockedNameSubstrings) ?? [],
+            requireAllowlistedPeer: d.object(forKey: DLPManagedKey.requireAllowlistedPeer) as? Bool ?? false,
+            blockOutbound: d.object(forKey: DLPManagedKey.blockOutbound) as? Bool ?? false,
+            blockInbound: d.object(forKey: DLPManagedKey.blockInbound) as? Bool ?? false,
+            policyLabel: d.string(forKey: DLPManagedKey.policyLabel)
+        )
+    }
 }

@@ -39,6 +39,29 @@ struct SettingsView: View {
                 .formStyle(.grouped)
                 .frame(width: 420)
             }
+            Tab("DLP", systemImage: "lock.shield") {
+                Form {
+                    LabeledContent("Status") {
+                        Text(model.dlp.enabled ? "Managed policy active" : "Off")
+                    }
+                    if let label = model.dlp.policyLabel {
+                        LabeledContent("Policy label", value: label)
+                    }
+                    if model.dlp.enabled {
+                        LabeledContent("Blocked extensions", value: model.dlp.blockedExtensions.joined(separator: ", "))
+                        LabeledContent("Max file bytes", value: model.dlp.maxFileBytes == 0 ? "Unlimited" : "\(model.dlp.maxFileBytes)")
+                        Toggle("Block outbound", isOn: .constant(model.dlp.blockOutbound))
+                            .disabled(true)
+                        Toggle("Block inbound", isOn: .constant(model.dlp.blockInbound))
+                            .disabled(true)
+                    }
+                    Text("DLP is configured via MDM (`app.watari.mac`). Full transfer gates ship in a later release; Preview already skips matching files when enabled.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                .formStyle(.grouped)
+                .frame(width: 460)
+            }
         }
         .scenePadding()
     }

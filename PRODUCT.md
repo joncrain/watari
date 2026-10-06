@@ -71,3 +71,9 @@ Not Migration Assistant. Not cloud sync. A calm, first-party-feeling Mac utility
 ## Accessibility & Inclusion
 
 VoiceOver labels on all primary controls; Reduce Motion honored; keyboard equivalents for Preview, Start, Stop; Dynamic Type / sidebar icon size respect where system provides them.
+
+## Later
+
+- Run the same one-way job when files change; then two-way sync with conflicts.
+- Full Disk Access opt-in; notarized distribution; richer MDM UI.
+- **Configurable DLP (MDM):** block by extension, path, name, size, job direction, and allowlisted peers; locked policy; SIEM label in the audit log. Model and preference keys are reserved in `WatariCore` / `docs/enterprise.md`; enforcement UI and transfer gates follow in a dedicated release.

@@ -28,6 +28,45 @@ Domain: `app.watari.mac`
 | `PeerAllowlist` | Array of dicts | Pre-seed pinned peers (`name`, `publicKey`, `host`, `port`) |
 | `DenyBonjour` | Boolean | Hard-disable Nearby |
 
+### DLP (planned — keys reserved)
+
+Configurable data-loss controls for a future release. The portable `DLPPolicy` model and preview skip reason (`dlp`) exist in `WatariCore` today; **full job enforcement and Settings UI ship later**. When `DLPEnabled` is true, MDM can steer what may cross the corridor without relying on a cloud DLP broker.
+
+| Key | Type | Meaning |
+|-----|------|---------|
+| `DLPEnabled` | Boolean | Turn DLP evaluation on |
+| `DLPLocked` | Boolean | Hide/disable user overrides in Settings |
+| `DLPBlockedExtensions` | Array of strings | Extensions that must not transfer (`pem`, `p12`, `key`, …) |
+| `DLPBlockedPathSuffixes` | Array of strings | Relative path suffixes / segments to block |
+| `DLPBlockedNameSubstrings` | Array of strings | Case-insensitive filename tokens to block |
+| `DLPMaxFileBytes` | Integer | Max single-file size; `0` = unlimited |
+| `DLPRequireAllowlistedPeer` | Boolean | Only pinned / MDM allowlisted peers |
+| `DLPBlockOutbound` | Boolean | Freeze sends (receive-only) |
+| `DLPBlockInbound` | Boolean | Freeze receives (send-only) |
+| `DLPPolicyLabel` | String | Label echoed into audit events for SIEM |
+
+**Design notes for IT**
+
+- DLP decisions appear in Preview before bytes move (same as denylist).
+- Built-in denylist (keychains, TCC, profiles) always applies; DLP is additive.
+- No content inspection / cloud upload in the first DLP cut — path, name, extension, size, direction, and peer allowlist only. Deeper classifiers can layer on later without changing these keys.
+- Audit `reason` codes will include `dlp` plus the verdict (`blockExtension`, `blockOutbound`, …).
+
+Example payload fragment:
+
+```xml
+<key>DLPEnabled</key><true/>
+<key>DLPLocked</key><true/>
+<key>DLPBlockedExtensions</key>
+<array>
+  <string>pem</string>
+  <string>p12</string>
+  <string>key</string>
+</array>
+<key>DLPRequireAllowlistedPeer</key><true/>
+<key>DLPPolicyLabel</key><string>corp-mac-corridor-v1</string>
+```
+
 ## Network checklist for IT
 
 1. Open the chosen TCP port between the two Macs (same VLAN or routed).
