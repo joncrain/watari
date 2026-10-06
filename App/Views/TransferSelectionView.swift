@@ -53,10 +53,17 @@ struct TransferSelectionView: View {
                         .padding(.horizontal, 32)
                 }
 
-                // Home Folder — files only
+                // Folders — files only (whitelist + Add folder…)
                 VStack(alignment: .leading, spacing: 8) {
-                    Text("Home Folder")
-                        .font(.headline)
+                    HStack(alignment: .firstTextBaseline) {
+                        Text("Folders")
+                            .font(.headline)
+                        Spacer()
+                        Button("Add folder…") {
+                            model.addFolder()
+                        }
+                        .help("Choose another folder (opens a system folder picker)")
+                    }
 
                     borderedFolderTree
                         .frame(minHeight: 220, maxHeight: 320)
@@ -108,7 +115,7 @@ struct TransferSelectionView: View {
                 ? "Select folders, then connect a peer."
                 : "Select folders, then Preview what will copy."
         case .noFolders:
-            return "Select folders from your home directory to copy to another Mac."
+            return "Select folders to copy to another Mac."
         }
     }
 
@@ -124,7 +131,7 @@ struct TransferSelectionView: View {
                     canExpand: true,
                     selection: usersSelection,
                     enabled: true,
-                    onToggle: { selectAllHomeFolders($0) }
+                    onToggle: { selectAllWhitelistedFolders($0) }
                 )
 
                 if sizes.usersExpanded {
@@ -137,12 +144,34 @@ struct TransferSelectionView: View {
                         canExpand: true,
                         selection: usersSelection,
                         enabled: true,
-                        onToggle: { selectAllHomeFolders($0) }
+                        onToggle: { selectAllWhitelistedFolders($0) }
                     )
 
                     if sizes.userExpanded {
                         ForEach(folderNodes) { node in
                             folderRow(node)
+                        }
+
+                        // Extra folders added via Add folder… that aren’t in the whitelist tree.
+                        ForEach(extraSelectedFolders) { entry in
+                            TransferTreeRow(
+                                title: entry.displayName,
+                                systemImage: "folder.fill",
+                                trailing: sizeLabel(for: entry.path),
+                                depth: 2,
+                                isExpanded: .constant(false),
+                                canExpand: false,
+                                selection: .on,
+                                enabled: true,
+                                onToggle: { selected in
+                                    if !selected { model.removeFolder(entry.id) }
+                                }
+                            )
+                            .contextMenu {
+                                Button("Re-authorize…") { model.reauthorizeFolder(entry.id) }
+                                Button("Remove", role: .destructive) { model.removeFolder(entry.id) }
+                            }
+                            .onAppear { sizes.estimate(paths: [entry.path]) }
                         }
                     }
                 }
@@ -155,6 +184,12 @@ struct TransferSelectionView: View {
             RoundedRectangle(cornerRadius: 6, style: .continuous)
                 .strokeBorder(Color(nsColor: .separatorColor), lineWidth: 1)
         )
+    }
+
+    /// Bookmarks outside the default whitelist (from Add folder…).
+    private var extraSelectedFolders: [BookmarkEntry] {
+        let whitelistPaths = Set(folderNodes.map(\.url.path))
+        return model.folderBookmarks.filter { !whitelistPaths.contains($0.path) }
     }
 
     private var borderedServicesList: some View {
@@ -296,16 +331,8 @@ struct TransferSelectionView: View {
         return .mixed
     }
 
-    private func selectAllHomeFolders(_ selected: Bool) {
-        if selected {
-            for node in folderNodes where !model.isFolderSelected(path: node.url.path) {
-                model.setFolderSelected(true, url: node.url)
-            }
-        } else {
-            for entry in model.folderBookmarks {
-                model.removeFolder(entry.id)
-            }
-        }
+    private func selectAllWhitelistedFolders(_ selected: Bool) {
+        model.setFoldersSelected(selected, urls: folderNodes.map(\.url))
     }
 
     private func sizeLabel(for path: String) -> String {
@@ -426,20 +453,24 @@ struct TransferNode: Identifiable, Hashable {
     var name: String
     var systemImage: String
 
-    /// User-facing home folders only — never Library, SystemData, tmp, or other junk.
-    static let allowedNames = [
-        "Desktop", "Documents", "Downloads", "Pictures", "Movies", "Music", "Public",
-    ]
+    /// User-facing folders only — never Library, SystemData, tmp, or other junk.
+    static let allowedNames = Array(BookmarkStore.whitelistedHomeFolderNames).sorted { a, b in
+        let order = ["Desktop", "Documents", "Downloads", "Pictures", "Movies", "Music", "Public"]
+        let ai = order.firstIndex(of: a) ?? Int.max
+        let bi = order.firstIndex(of: b) ?? Int.max
+        if ai != bi { return ai < bi }
+        return a.localizedCaseInsensitiveCompare(b) == .orderedAscending
+    }
 
     static func homeFolders(of home: URL) -> [TransferNode] {
         let fm = FileManager.default
-        return allowedNames.compactMap { name in
-            let url = home.appendingPathComponent(name, isDirectory: true)
+        return allowedNames.compactMap { name -> TransferNode? in
+            let url = home.appendingPathComponent(name, isDirectory: true).standardizedFileURL
             var isDir: ObjCBool = false
-            if fm.fileExists(atPath: url.path, isDirectory: &isDir) {
-                guard isDir.boolValue else { return nil }
+            // Only list folders that exist; missing dirs caused spurious selection errors.
+            guard fm.fileExists(atPath: url.path, isDirectory: &isDir), isDir.boolValue else {
+                return nil
             }
-            // Still list the standard folder when sandbox obscures existence checks.
             return TransferNode(url: url, name: name, systemImage: symbol(for: name))
         }
     }

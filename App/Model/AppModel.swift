@@ -27,7 +27,7 @@ final class AppModel: ObservableObject {
     @Published var dlp: DLPPolicy = ManagedDefaults.dlpPolicy()
     @Published var network: NetworkConfig = .default
     @Published var jobLog = JobLog()
-    @Published var statusMessage: String = "Select folders from Home to begin."
+    @Published var statusMessage: String = "Select folders to begin."
     @Published var progressFraction: Double = 0
     @Published var showConnectSheet = false
     @Published var libraryWarning: String?
@@ -93,18 +93,51 @@ final class AppModel: ObservableObject {
         folderBookmarks.contains { $0.path == path }
     }
 
-    /// Toggle a standard home folder into the job. Checkbox UX only — no per-folder open panel.
-    func setFolderSelected(_ selected: Bool, url: URL) {
+    /// Toggle a whitelist folder into the job. Checkbox UX only — no open panel.
+    func setFolderSelected(_ selected: Bool, url: URL, surfaceError: Bool = true) {
         if selected {
             if isFolderSelected(path: url.path) { return }
             do {
-                let entry = try bookmarkStore.bookmarkHomeFolder(url)
+                let entry = try bookmarkStore.bookmarkWhitelistedFolder(url)
                 ingestEntry(entry)
             } catch {
-                lastError = error.localizedDescription
+                NSLog("Watari: failed to select %@: %@", url.path, error.localizedDescription)
+                if surfaceError {
+                    lastError = error.localizedDescription
+                }
             }
         } else if let entry = folderBookmarks.first(where: { $0.path == url.path }) {
             removeFolder(entry.id)
+        }
+    }
+
+    /// Select or clear several whitelist folders; suppresses per-folder alert spam.
+    func setFoldersSelected(_ selected: Bool, urls: [URL]) {
+        if selected {
+            var failed: [String] = []
+            for url in urls where !isFolderSelected(path: url.path) {
+                do {
+                    let entry = try bookmarkStore.bookmarkWhitelistedFolder(url)
+                    ingestEntry(entry)
+                } catch {
+                    NSLog("Watari: failed to select %@: %@", url.path, error.localizedDescription)
+                    failed.append(url.lastPathComponent)
+                }
+            }
+            if !failed.isEmpty {
+                let list = failed.joined(separator: ", ")
+                statusMessage = "Couldn’t select \(list)."
+                // Only alert when nothing was selected.
+                if folderBookmarks.isEmpty {
+                    lastError = "Couldn’t select \(list)."
+                }
+            }
+        } else {
+            for url in urls {
+                if let entry = folderBookmarks.first(where: { $0.path == url.path }) {
+                    removeFolder(entry.id)
+                }
+            }
         }
     }
 
@@ -157,7 +190,7 @@ final class AppModel: ObservableObject {
         peerDestinations = [:]
         if folderBookmarks.isEmpty {
             phase = .noFolders
-            statusMessage = "Select folders from Home to begin."
+            statusMessage = "Select folders to begin."
         }
     }
 
@@ -377,7 +410,7 @@ final class AppModel: ObservableObject {
         showConnectSheet = false
         if folderBookmarks.isEmpty {
             phase = .noFolders
-            statusMessage = "Peer saved. Select folders from Home to begin."
+            statusMessage = "Peer saved. Select folders to begin."
         } else {
             phase = .waitingForPeer
             statusMessage = "Peer connected. Run Preview."
