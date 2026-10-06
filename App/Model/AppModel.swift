@@ -111,7 +111,8 @@ final class AppModel: ObservableObject {
     var usesHomeReceiveMapping: Bool { receiveFolder == nil }
 
     var destinationHomeURL: URL {
-        FileManager.default.homeDirectoryForCurrentUser.standardizedFileURL
+        // Real user home — not the sandbox container path.
+        bookmarkStore.homeDirectory
     }
 
     /// Selected offers mapped onto this Mac (home-relative by default).

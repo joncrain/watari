@@ -35,8 +35,14 @@ enum DockReader {
     }
 
     private static func appsFromPlist() -> [DockAppOffer]? {
-        let url = FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent("Library/Preferences/com.apple.dock.plist")
+        // Real home — temporary-exception path is relative to /Users/<name>.
+        let home: URL = {
+            if let pw = getpwuid(getuid()), let dir = pw.pointee.pw_dir {
+                return URL(fileURLWithPath: String(cString: dir), isDirectory: true)
+            }
+            return FileManager.default.homeDirectoryForCurrentUser
+        }()
+        let url = home.appendingPathComponent("Library/Preferences/com.apple.dock.plist")
         guard FileManager.default.fileExists(atPath: url.path) else {
             dockLog.error("Dock plist missing at \(url.path, privacy: .public)")
             return nil

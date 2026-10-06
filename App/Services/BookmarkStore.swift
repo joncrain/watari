@@ -45,8 +45,19 @@ final class BookmarkStore: @unchecked Sendable {
         "Desktop", "Documents", "Downloads", "Pictures", "Movies", "Music", "Public",
     ]
 
+    /// Real user home (`/Users/<name>`), not the App Sandbox container home.
+    ///
+    /// `FileManager.homeDirectoryForCurrentUser` returns
+    /// `~/Library/Containers/app.watari.mac/Data` inside the sandbox, which
+    /// made whitelist offers resolve to container stubs (only Documents was
+    /// listable) instead of the user’s real Desktop/Documents/….
+    /// Home-relative temporary-exception entitlements apply to the real home.
     var homeDirectory: URL {
-        FileManager.default.homeDirectoryForCurrentUser.standardizedFileURL
+        if let pw = getpwuid(getuid()), let dir = pw.pointee.pw_dir {
+            return URL(fileURLWithPath: String(cString: dir), isDirectory: true)
+                .standardizedFileURL
+        }
+        return FileManager.default.homeDirectoryForCurrentUser.standardizedFileURL
     }
 
     func pickFolder(startingAt directory: URL? = nil, message: String? = nil) -> URL? {

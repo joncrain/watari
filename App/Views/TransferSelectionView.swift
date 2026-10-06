@@ -8,7 +8,7 @@ struct TransferSelectionView: View {
 
     private var availableBytes: UInt64? {
         let path = model.receiveFolder?.path
-            ?? FileManager.default.homeDirectoryForCurrentUser.path
+            ?? model.destinationHomeURL.path
         if let attrs = try? FileManager.default.attributesOfFileSystem(forPath: path),
            let free = attrs[.systemFreeSize] as? NSNumber {
             return free.uint64Value
