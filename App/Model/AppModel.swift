@@ -1,5 +1,6 @@
 import AppKit
 import Foundation
+import Network
 import SwiftUI
 import UniformTypeIdentifiers
 import WatariCore
@@ -534,7 +535,7 @@ final class AppModel: ObservableObject {
         network.discoveryMode == .nearby && !ManagedDefaults.denyBonjour
     }
 
-    /// Pair to host/port and move into the offer-catalog phase.
+    /// Pair to host/port and move into the offer-catalog phase (one TLS socket).
     func connectAndBrowse(
         host: String,
         port: Int,
@@ -542,19 +543,52 @@ final class AppModel: ObservableObject {
         pairingCode: String = ""
     ) async throws {
         let name = displayName.isEmpty ? host : displayName
-        let record = try await peerConnector.pair(
+        let (record, connection) = try await peerConnector.pairKeepingConnection(
             host: host,
             port: port,
             displayName: name,
             pairingCode: pairingCode
         )
-        adoptConnectedPeer(record)
+        try await finishConnect(record: record, connection: connection)
     }
 
     /// Nearby: pair via Bonjour service endpoint (no pre-resolve to IP).
     func connectAndBrowse(bonjour peer: BonjourPeer, pairingCode: String = "") async throws {
-        let record = try await peerConnector.pair(bonjour: peer, pairingCode: pairingCode)
-        adoptConnectedPeer(record)
+        let (record, connection) = try await peerConnector.pairKeepingConnection(
+            bonjour: peer,
+            pairingCode: pairingCode
+        )
+        try await finishConnect(record: record, connection: connection)
+    }
+
+    private func finishConnect(record: PeerRecord, connection: NWConnection) async throws {
+        defer { connection.cancel() }
+        peers.append(record)
+        selectedPeerID = record.id
+        showConnectSheet = false
+        phase = .browsingOffers
+        statusMessage = "Peer connected. Loading offered folders…"
+        isRefreshingOffers = true
+        do {
+            let catalog = try await transfer.fetchOfferCatalog(on: connection)
+            peerOffers = catalog.roots.sorted {
+                $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending
+            }
+            peerOfferDisplayName = catalog.displayName
+            selectedOfferNames = selectedOfferNames.intersection(Set(catalog.roots.map(\.name)))
+            isRefreshingOffers = false
+            if catalog.roots.isEmpty {
+                statusMessage = "\(catalog.displayName) isn’t offering folders yet. On that Mac, enable Listen and offer folders in Settings."
+            } else {
+                statusMessage = "Connected to \(catalog.displayName). Choose folders to transfer here."
+            }
+        } catch {
+            isRefreshingOffers = false
+            lastError = error.localizedDescription
+            statusMessage = "Couldn’t load offered folders — \(error.localizedDescription)"
+            modelLog.error("offer catalog failed: \(error.localizedDescription, privacy: .public)")
+            throw error
+        }
     }
 
     private func adoptConnectedPeer(_ record: PeerRecord) {

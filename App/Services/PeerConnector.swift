@@ -51,10 +51,11 @@ final class PeerConnector: @unchecked Sendable {
     func pair(host: String, port: Int, displayName: String, pairingCode: String) async throws -> PeerRecord {
         guard port > 0, port < 65536 else { throw PeerConnectorError.invalidPort }
         let endpoint = NWEndpoint.hostPort(host: NWEndpoint.Host(host), port: NWEndpoint.Port(rawValue: UInt16(port))!)
-        let (peerKey, resolved) = try await connectAndExchange(
+        let (peerKey, resolved, _) = try await connectAndExchange(
             to: endpoint,
             pairingCode: pairingCode,
-            requirePinned: nil
+            requirePinned: nil,
+            keepOpen: false
         )
         return PeerRecord(
             displayName: displayName,
@@ -66,10 +67,11 @@ final class PeerConnector: @unchecked Sendable {
 
     /// Nearby: connect via Bonjour service endpoint so Network.framework picks the best path.
     func pair(bonjour peer: BonjourPeer, pairingCode: String = "") async throws -> PeerRecord {
-        let (peerKey, resolved) = try await connectAndExchange(
+        let (peerKey, resolved, _) = try await connectAndExchange(
             to: peer.endpoint,
             pairingCode: pairingCode,
-            requirePinned: nil
+            requirePinned: nil,
+            keepOpen: false
         )
         return PeerRecord(
             displayName: peer.name,
@@ -79,27 +81,72 @@ final class PeerConnector: @unchecked Sendable {
         )
     }
 
+    /// Pair and leave the TLS socket open for an immediate follow-up (offer catalog).
+    func pairKeepingConnection(
+        host: String,
+        port: Int,
+        displayName: String,
+        pairingCode: String = ""
+    ) async throws -> (PeerRecord, NWConnection) {
+        guard port > 0, port < 65536 else { throw PeerConnectorError.invalidPort }
+        let endpoint = NWEndpoint.hostPort(host: NWEndpoint.Host(host), port: NWEndpoint.Port(rawValue: UInt16(port))!)
+        let (peerKey, resolved, connection) = try await connectAndExchange(
+            to: endpoint,
+            pairingCode: pairingCode,
+            requirePinned: nil,
+            keepOpen: true
+        )
+        let record = PeerRecord(
+            displayName: displayName.isEmpty ? host : displayName,
+            host: resolved.host ?? host,
+            port: resolved.port ?? port,
+            publicKey: peerKey
+        )
+        return (record, connection)
+    }
+
+    func pairKeepingConnection(bonjour peer: BonjourPeer, pairingCode: String = "") async throws -> (PeerRecord, NWConnection) {
+        let (peerKey, resolved, connection) = try await connectAndExchange(
+            to: peer.endpoint,
+            pairingCode: pairingCode,
+            requirePinned: nil,
+            keepOpen: true
+        )
+        let record = PeerRecord(
+            displayName: peer.name,
+            host: resolved.host,
+            port: resolved.port ?? 59234,
+            publicKey: peerKey
+        )
+        return (record, connection)
+    }
+
     func openTLS(to peer: PeerRecord) async throws -> NWConnection {
         guard let host = peer.host, let port = peer.port else {
             throw PeerConnectorError.handshakeFailed("Peer has no host/port.")
         }
         let endpoint = NWEndpoint.hostPort(host: NWEndpoint.Host(host), port: NWEndpoint.Port(rawValue: UInt16(port))!)
-        _ = try await connectAndExchange(
+        let (_, _, connection) = try await connectAndExchange(
             to: endpoint,
             pairingCode: "",
-            requirePinned: peer.publicKey.isEmpty ? nil : peer.publicKey
+            requirePinned: peer.publicKey.isEmpty ? nil : peer.publicKey,
+            keepOpen: true
         )
-        guard let connection else {
-            throw PeerConnectorError.handshakeFailed("No connection.")
-        }
         return connection
     }
 
     private func connectAndExchange(
         to endpoint: NWEndpoint,
         pairingCode: String,
-        requirePinned: Data?
-    ) async throws -> (Data, (host: String?, port: Int?)) {
+        requirePinned: Data?,
+        keepOpen: Bool
+    ) async throws -> (Data, (host: String?, port: Int?), NWConnection) {
+        // Drop any prior socket so pair()+catalog cannot orphan a Hello’d connection.
+        if let previous = connection {
+            previous.cancel()
+            connection = nil
+        }
+
         let params = WatariTLS.clientParameters()
         let connection = NWConnection(to: endpoint, using: params)
         self.connection = connection
@@ -108,6 +155,7 @@ final class PeerConnector: @unchecked Sendable {
             try await waitUntilReady(connection)
         } catch {
             connection.cancel()
+            self.connection = nil
             throw mapNetworkError(error)
         }
 
@@ -128,16 +176,24 @@ final class PeerConnector: @unchecked Sendable {
         let frames = FrameBuffer()
         let frame = try await receiveFrame(on: connection, buffer: frames)
         guard frame.type == .hello else {
+            connection.cancel()
+            self.connection = nil
             throw PeerConnectorError.handshakeFailed("Expected hello from peer.")
         }
         let peerHello = try TransferCodec.decodeJSON(frame, as: HelloPayload.self)
 
         if let requirePinned, !requirePinned.isEmpty, peerHello.publicKey != requirePinned {
             connection.cancel()
+            self.connection = nil
             throw PeerConnectorError.untrustedPeer
         }
 
-        return (peerHello.publicKey, resolved)
+        if !keepOpen {
+            connection.cancel()
+            self.connection = nil
+        }
+
+        return (peerHello.publicKey, resolved, connection)
     }
 
     /// Wait for `.ready` only. Do **not** fail on `.waiting(ECONNREFUSED)` —

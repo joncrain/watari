@@ -8,7 +8,6 @@ private let listenLog = Logger(subsystem: "app.watari.mac", category: "JobListen
 /// Accepts inbound TLS: offer catalog / pull (source) and push jobs (destination).
 final class JobListener: @unchecked Sendable {
     private var listener: NWListener?
-    private let transfer = TransferSession()
     private let identityKey: () -> Data
     private let displayName: () -> String
 
@@ -50,32 +49,37 @@ final class JobListener: @unchecked Sendable {
         let receive = receiveRoot
         listener.newConnectionHandler = { [weak self] connection in
             guard let self else { return }
+            let key = self.identityKey()
+            let name = self.displayName()
             connection.start(queue: .global(qos: .userInitiated))
+            // One TransferSession per connection — a shared session raced when pair()+catalog
+            // opened two sockets and both called serve() (cancelled / peerGone).
+            let session = TransferSession()
             Task {
+                defer { connection.cancel() }
                 do {
-                    try await self.transfer.serve(
+                    try await session.serve(
                         on: connection,
                         receiveRoot: receive,
                         offeredRoots: offered,
                         offerCatalog: catalog,
-                        identityKey: self.identityKey(),
-                        displayName: self.displayName(),
+                        identityKey: key,
+                        displayName: name,
                         applier: applier,
                         onIndexUpdate: onIndexUpdate,
                         progress: { _, _ in }
                     )
                 } catch {
-                    // Ignore aborted / probe noise (cleartext Bonjour resolve, cancelled peers).
                     let text = error.localizedDescription
                     if text.contains("-9816") || text.contains("-9810")
                         || text.localizedCaseInsensitiveContains("cancel")
-                        || text.localizedCaseInsensitiveContains("closed") {
+                        || text.localizedCaseInsensitiveContains("closed")
+                        || text.localizedCaseInsensitiveContains("disconnected") {
                         listenLog.debug("Inbound session ended early: \(text, privacy: .public)")
                     } else {
                         onError(text)
                     }
                 }
-                connection.cancel()
             }
         }
         listener.stateUpdateHandler = { state in
@@ -96,6 +100,5 @@ final class JobListener: @unchecked Sendable {
     func stop() {
         listener?.cancel()
         listener = nil
-        transfer.cancel()
     }
 }

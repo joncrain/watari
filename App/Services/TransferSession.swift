@@ -53,6 +53,8 @@ final class TransferSession: @unchecked Sendable {
     }
 
     /// Destination-primary: ask the source what folder roots it offers (from its index).
+    /// Opens one TLS session (Hello + catalog). Do not call after a separate `pair()` —
+    /// that left an orphaned Hello connection and raced a second socket (“Peer disconnected”).
     func fetchOfferCatalog(
         peer: PeerRecord,
         connector: PeerConnector
@@ -60,13 +62,24 @@ final class TransferSession: @unchecked Sendable {
         cancelled = false
         let connection = try await connector.openTLS(to: peer)
         defer { connection.cancel() }
+        return try await fetchOfferCatalog(on: connection)
+    }
 
+    /// Catalog request on an already Hello’d connection (same socket as pairing).
+    func fetchOfferCatalog(on connection: NWConnection) async throws -> OfferCatalogResponsePayload {
         let frames = FrameBuffer()
         try await send(
             try TransferCodec.encodeJSON(.offerCatalogRequest, OfferCatalogRequestPayload()),
             on: connection
         )
-        let frame = try await receiveFrame(on: connection, buffer: frames)
+        let frame: WireFrame
+        do {
+            frame = try await receiveFrame(on: connection, buffer: frames)
+        } catch {
+            throw TransferSessionError.inventoryFailed(
+                "Peer closed while loading folders (\(error.localizedDescription)). Confirm Listen is on and both Macs run the same Watari build."
+            )
+        }
         guard frame.type == .offerCatalogResponse else {
             throw TransferSessionError.inventoryFailed("Expected offerCatalogResponse, got \(frame.type)")
         }
