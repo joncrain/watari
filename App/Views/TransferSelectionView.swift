@@ -29,13 +29,6 @@ struct TransferSelectionView: View {
         sizes.volumeFreeBytes
     }
 
-    private var destinationLabel: String {
-        if let peer = model.selectedPeer {
-            return peer.displayName
-        }
-        return "this Mac"
-    }
-
     var body: some View {
         VStack(spacing: 0) {
             Spacer(minLength: 28)
@@ -167,17 +160,25 @@ struct TransferSelectionView: View {
     }
 
     private var footer: some View {
-        let selected = ByteCountFormatter.string(fromByteCount: Int64(selectedBytes), countStyle: .file)
+        let selected: String = {
+            let unknownSizes = model.folderBookmarks.contains { sizes.bytes(for: $0.path) == nil }
+            if !model.folderBookmarks.isEmpty, selectedBytes == 0, unknownSizes {
+                let n = model.folderBookmarks.count
+                return n == 1 ? "1 folder" : "\(n) folders"
+            }
+            return ByteCountFormatter.string(fromByteCount: Int64(selectedBytes), countStyle: .file)
+        }()
         let available: String = {
             if let availableBytes {
                 return ByteCountFormatter.string(fromByteCount: Int64(availableBytes), countStyle: .file)
             }
             return "—"
         }()
-        return Text("\(selected) selected to transfer. \(available) available on \(destinationLabel).")
+        let dest = model.selectedPeer?.displayName ?? "this Mac"
+        return Text("\(selected) selected to transfer. \(available) available on \(dest).")
             .font(.caption)
             .foregroundStyle(.secondary)
-            .accessibilityLabel("\(selected) selected to transfer. \(available) available on \(destinationLabel).")
+            .accessibilityLabel("\(selected) selected to transfer. \(available) available on \(dest).")
     }
 
     @ViewBuilder
